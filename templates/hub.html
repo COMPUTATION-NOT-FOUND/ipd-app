@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Strategy Hub - Prisoner's Dilemma</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        /* The global .card rule sets only colours/border (no padding/margin), so give the
+           Hub cards their own breathing room and consistent vertical rhythm. */
+        .container { padding-top: 8px; padding-bottom: 24px; }
+        .card { padding: 20px 24px; margin-bottom: 20px; }
+        .card > h2:first-child, .card > h3:first-child { margin-top: 0; }
+        .card p { margin: 0 0 14px; line-height: 1.5; }
+        .hub-list { list-style: none; padding: 0; margin: 8px 0 0; }
+        .hub-item {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 10px 12px; border: 1px solid var(--border-color);
+            border-radius: 6px; margin-bottom: 8px; gap: 10px;
+        }
+        .hub-item .meta { font-family: var(--font-mono); font-size: 0.85rem; opacity: 0.8; }
+        .hub-msg { padding: 10px 12px; border-radius: 6px; margin: 16px 0 0; display: none; }
+        .hub-msg.ok { background: rgba(40,167,69,0.15); border: 1px solid var(--success-color); }
+        .hub-msg.err { background: rgba(220,53,69,0.15); border: 1px solid var(--danger-color); }
+        .hub-field { display: block; width: 100%; margin-bottom: 12px; }
+        textarea.hub-field { min-height: 150px; font-family: var(--font-mono); }
+        /* Buttons get a little gap so stacked/adjacent ones don't touch. */
+        .card button, .card .btn { margin: 4px 8px 4px 0; }
+        #localPlayers { margin: 8px 0; }
+        .localPlayerRow textarea.hub-field { min-height: 90px; }
+        /* Sub-tabs for the submitted-strategies list (Players / Bots / Practice). */
+        .hub-subtabs { display: flex; gap: 6px; margin: 4px 0 14px; flex-wrap: wrap; }
+        .hub-subtab {
+            background: transparent; color: var(--text-secondary);
+            border: 1px solid var(--border-color); border-radius: 6px;
+            padding: 6px 14px; cursor: pointer; font-size: 0.9rem;
+        }
+        .hub-subtab.active { background: var(--primary-color); color: #fff; border-color: var(--primary-color); }
+    </style>
+</head>
+<body>
+    {% include 'navbar.html' %}
+    <div class="container" style="max-width: 1200px; margin: 0 auto; padding: 0 15px;">
+        <div class="card">
+            <h2 style="font-family: var(--font-mono);"><i class="fas fa-share-nodes"></i> Strategy Hub</h2>
+            <p>Browse the strategies submitted on the website and <strong>import</strong> one into your
+            practice editor to play against it. Imported code is screened by this machine's sandbox
+            before it is handed back to you.</p>
+
+            {% if not hub_enabled %}
+            <div class="hub-msg err" style="display:block;">
+                <i class="fas fa-triangle-exclamation"></i> The website is not configured. Set
+                <code>HUB_BASE_URL</code> (and <code>HUB_API_TOKEN</code>) in your <code>.env</code> and restart.
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Submit your strategy (handoff to the website, which forces login) -->
+        <div class="card">
+            <h3><i class="fas fa-paper-plane"></i> Submit your strategy to the website</h3>
+            <p>Opens the website's submission page with your strategy <strong>prefilled</strong>; log in
+            there and click Save. (Submission + login happen on the website, not in this local app.)</p>
+            <input type="text" id="subName" class="hub-field" placeholder="Strategy name" maxlength="50">
+            <textarea id="subCode" class="hub-field" placeholder="def myStrategy(last_moves, my_history, opponents_histories, meta):&#10;    return 'C'"></textarea>
+            <button id="submitBtn" class="btn-success"><i class="fas fa-arrow-up-right-from-square"></i> Open website to submit</button>
+        </div>
+
+        <!-- Gallery -->
+        <div class="card">
+            <h3 style="display:flex; justify-content:space-between; align-items:center;">
+                <span><i class="fas fa-list"></i> Submitted strategies</span>
+                <button id="refreshBtn" class="btn-primary"><i class="fas fa-rotate"></i> Refresh</button>
+            </h3>
+            <div class="hub-subtabs">
+                <button class="hub-subtab active" data-tab="players"><i class="fas fa-users"></i> Players (<span id="cntPlayers">0</span>)</button>
+                <button class="hub-subtab" data-tab="bots"><i class="fas fa-robot"></i> Bots (<span id="cntBots">0</span>)</button>
+                <button class="hub-subtab" data-tab="practice"><i class="fas fa-graduation-cap"></i> Practice (<span id="cntPractice">0</span>)</button>
+            </div>
+            <ul id="hubList" class="hub-list"><li class="meta">Click "Refresh" to load.</li></ul>
+        </div>
+
+        <!-- Imported code panel -->
+        <div class="card" id="importPanel" style="display:none;">
+            <h3><i class="fas fa-download"></i> Imported: <span id="importName"></span></h3>
+            <p>Screened and accepted by this machine's sandbox. Copy it into the Practice editor to play
+            against it.</p>
+            <textarea id="importCode" class="hub-field" readonly></textarea>
+            <button id="copyBtn" class="btn-primary"><i class="fas fa-copy"></i> Copy code</button>
+        </div>
+
+        <!-- Running tournaments + publishing results now lives in the Practice tab:
+             load submitted strategies, add local players, run, then "Submit results". -->
+        <div class="card" style="border: 1px dashed var(--border-color);">
+            <p style="margin:0;"><i class="fas fa-circle-info"></i> To run a tournament and publish
+            results, go to the <a href="/"><strong>Practice</strong></a> tab — load submitted strategies,
+            add your own players, run, then use "Submit results to website".</p>
+        </div>
+
+        <div id="hubMsg" class="hub-msg"></div>
+    </div>
+
+    <script nonce="{{ csp_nonce }}">
+        const HUB_ENABLED = {{ 'true' if hub_enabled else 'false' }};
+        const HUB_BASE_URL = {{ hub_base_url | tojson }};
+
+        function showMsg(text, ok) {
+            const el = document.getElementById('hubMsg');
+            el.textContent = text;
+            el.className = 'hub-msg ' + (ok ? 'ok' : 'err');
+            el.style.display = 'block';
+        }
+
+        // Submitted strategies split into sub-tabs: real players, admin bots, organizer practice.
+        let hubData = { players: [], bots: [], practice: [] };
+        let activeTab = 'players';
+
+        function setHubData(strategies, practice) {
+            const players = [], bots = [];
+            for (const s of (strategies || [])) ((s.type === 'bot') ? bots : players).push(s);
+            hubData = { players, bots, practice: practice || [] };
+            document.getElementById('cntPlayers').textContent = players.length;
+            document.getElementById('cntBots').textContent = bots.length;
+            document.getElementById('cntPractice').textContent = hubData.practice.length;
+        }
+
+        function renderActiveTab() {
+            const list = document.getElementById('hubList');
+            const items = hubData[activeTab] || [];
+            if (!items.length) {
+                list.innerHTML = '<li class="meta">None in this category. Press Refresh while online.</li>';
+                return;
+            }
+            list.innerHTML = '';
+            for (const s of items) {
+                const li = document.createElement('li');
+                li.className = 'hub-item';
+                const info = document.createElement('div');
+                const name = document.createElement('div');
+                name.textContent = s.name || '(unnamed)';
+                const meta = document.createElement('div');
+                meta.className = 'meta';
+                meta.textContent = s.author ? 'by ' + s.author : '';
+                info.appendChild(name); info.appendChild(meta);
+                const btn = document.createElement('button');
+                btn.className = 'btn-primary';
+                btn.innerHTML = '<i class="fas fa-download"></i> Import';
+                btn.addEventListener('click', () => importStrategy(s.id));
+                li.appendChild(info); li.appendChild(btn);
+                list.appendChild(li);
+            }
+        }
+
+        async function loadCache() {
+            // Local cache only — no network. Shown on every page load.
+            try {
+                const data = await (await fetch('/hub/list')).json();
+                setHubData(data.strategies, data.practice);
+            } catch (e) { setHubData([], []); }
+            renderActiveTab();
+        }
+
+        async function doRefresh() {
+            // The only networked call: fetch from the website and update the cache.
+            const btn = document.getElementById('refreshBtn');
+            btn.disabled = true;
+            document.getElementById('hubList').innerHTML = '<li class="meta">Refreshing from website…</li>';
+            try {
+                const resp = await fetch('/hub/refresh', { method: 'POST' });
+                const data = await resp.json();
+                setHubData(data.strategies, data.practice);
+                renderActiveTab();
+                if (!resp.ok) { throw new Error(data.error || 'Refresh failed'); }
+                const total = hubData.players.length + hubData.bots.length + hubData.practice.length;
+                showMsg('Updated from website (' + total + ' cached: ' + hubData.players.length + ' player, '
+                        + hubData.bots.length + ' bot, ' + hubData.practice.length + ' practice).', true);
+            } catch (e) { showMsg(e.message, false); }
+            finally { btn.disabled = false; }
+        }
+
+        async function importStrategy(id) {
+            try {
+                const resp = await fetch('/hub/import/' + encodeURIComponent(id), { method: 'POST' });
+                const data = await resp.json();
+                if (!resp.ok) { throw new Error(data.error || 'Import failed'); }
+                document.getElementById('importName').textContent = data.name;
+                document.getElementById('importCode').value = data.code;
+                document.getElementById('importPanel').style.display = 'block';
+                showMsg('Imported "' + data.name + '" — passed the local sandbox.', true);
+            } catch (e) { showMsg(e.message, false); }
+        }
+
+        document.getElementById('submitBtn').addEventListener('click', async () => {
+            if (!HUB_BASE_URL) { showMsg('Website not configured (set HUB_BASE_URL).', false); return; }
+            const name = document.getElementById('subName').value.trim();
+            const code = document.getElementById('subCode').value;
+            if (!name || !code) { showMsg('Enter a strategy name and code first.', false); return; }
+            const btn = document.getElementById('submitBtn'); btn.disabled = true;
+            showMsg('Screening and test-running your strategy locally…', true);
+            try {
+                // Must pass the local screen + smoke test before it can be submitted.
+                const resp = await fetch('/hub/screen', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, code }) });
+                const data = await resp.json();
+                if (!resp.ok) { throw new Error(data.error || 'Screening failed'); }
+                const url = HUB_BASE_URL.replace(/\/$/, '') + '/tournament?name='
+                    + encodeURIComponent(name) + '&code=' + encodeURIComponent(code);
+                if (url.length > 7500) {
+                    showMsg('Strategy is too large to submit via the browser handoff — trim it and retry.', false);
+                    return;
+                }
+                window.open(url, '_blank');
+                showMsg('Passed local screening — opened the website prefilled. Log in and click Save.', true);
+            } catch (e) { showMsg(e.message, false); }
+            finally { btn.disabled = false; }
+        });
+        document.getElementById('refreshBtn').addEventListener('click', doRefresh);
+        document.querySelectorAll('.hub-subtab').forEach(b => b.addEventListener('click', () => {
+            activeTab = b.dataset.tab;
+            document.querySelectorAll('.hub-subtab').forEach(x => x.classList.toggle('active', x === b));
+            renderActiveTab();
+        }));
+        document.getElementById('copyBtn').addEventListener('click', () => {
+            const ta = document.getElementById('importCode');
+            ta.select();
+            navigator.clipboard.writeText(ta.value).then(() => showMsg('Copied to clipboard.', true));
+        });
+
+        loadCache();   // show cached strategies (offline-friendly); Refresh updates from the website
+    </script>
+</body>
+</html>

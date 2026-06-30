@@ -1,0 +1,22 @@
+<!-- Font Awesome CDN -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+<!-- Custom Tech Theme -->
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+
+<nav style="padding: 15px; margin-bottom: 20px; border-radius: 0 0 8px 8px;">
+    <div class="nav-inner" style="display: flex; justify-content: space-between; align-items: center; max-width: 1200px; margin: 0 auto;">
+        <h2 style="margin: 0; font-family: var(--font-mono); font-size: 1.25rem;">
+            <i class="fas fa-code"></i> Prisoner's Dilemma
+        </h2>
+        <div class="nav-links" style="display: flex; gap: 5px;">
+            <!-- Local student app: practice + fetch only. Login / submission / results
+                 live on the website, not here. -->
+            <a href="/" style="text-decoration: none; padding: 8px 16px; border-radius: 4px; transition: all 0.2s;">
+                <i class="fas fa-bullseye"></i> Practice
+            </a>
+            <a href="/hub" style="text-decoration: none; padding: 8px 16px; border-radius: 4px; transition: all 0.2s;">
+                <i class="fas fa-share-nodes"></i> Hub
+            </a>
+        </div>
+    </div>
+</nav>

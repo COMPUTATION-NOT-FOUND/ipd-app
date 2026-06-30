@@ -1,0 +1,7 @@
+Flask
+Flask-Limiter
+requests
+waitress
+python-dotenv
+pytest
+pytest-cov

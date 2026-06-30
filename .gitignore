@@ -1,0 +1,96 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+bin/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+#  Usually these files are written by a python script, and contain methods of configuration for PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesistest/
+.pytest_cache/
+cover/
+
+# Environments
+.env
+.env.local
+.env.*.local
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project specific
+logs/
+firebase-service-account-key.json
+workspace_context.md
+dump.py
+# The Hub is a separate, independently-deployed git repo nested here for convenience;
+# the app repo must NOT track it (students clone the app without the Hub).
+ipd-hub/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Security & Secrets
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+*-key.json
+*-credentials.json
+.credentials/
+secrets/
+.secret
+*.secret
+
+# Local strategy cache (offline gallery)
+strategy_cache.json
+practice_cache.json

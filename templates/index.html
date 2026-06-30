@@ -1,0 +1,1509 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Python Prisoner's Dilemma</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        /* Top-level practice tabs (1v1 / N-Player / OS Simulation) */
+        .tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+        .tab { padding: 12px 24px; background: var(--bg-hover); border: 1px solid var(--border-color); border-bottom: none; cursor: pointer; color: var(--text-secondary); }
+        .tab:first-child { border-top-left-radius: 5px; }
+        .tab:last-child { border-top-right-radius: 5px; }
+        .tab.active { background: var(--bg-card); color: var(--text-primary); border-bottom: 1px solid var(--bg-card); margin-bottom: -1px; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .player { display: inline-block; width: 45%; vertical-align: top; margin: 10px; padding: 20px; border-radius: 10px; }
+        .strategy { margin: 15px 0; padding: 15px; border-radius: 10px; }
+        .player h3 { margin-top: 0; }
+        textarea { width: 100%; height: 200px; font-size: 14px; }
+        button { padding: 12px 24px; margin: 10px; font-size: 16px; border: none; cursor: pointer; }
+        .results { margin-top: 30px; padding: 20px; border-radius: 10px; }
+        .winner { font-size: 24px; font-weight: bold; margin-bottom: 15px; color: var(--success-color); }
+        .scores { font-size: 18px; margin: 10px 0; }
+        .leaderboard { margin-top: 20px; }
+        .leaderboard table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        .leaderboard th, .leaderboard td { padding: 8px; border: 1px solid var(--border-color); text-align: center; }
+        .match-results { margin-top: 20px; max-height: 400px; overflow-y: auto; }
+        .match { margin: 10px 0; padding: 10px; border-radius: 5px; cursor: pointer; transition: all 0.3s; }
+        .language-selector { margin-bottom: 10px; }
+        .examples { margin-top: 10px; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 5px; font-size: 12px; }
+        .example-title { font-weight: bold; margin-bottom: 5px; }
+        .example-code { padding: 8px; border-radius: 3px; margin: 5px 0; }
+        
+        /* Modal styles */
+        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.8); backdrop-filter: blur(4px); }
+        .modal-content { margin: 5% auto; padding: 20px; border-radius: 10px; width: 90%; max-width: 1000px; max-height: 80%; overflow-y: auto; }
+        .close { float: right; font-size: 28px; font-weight: bold; cursor: pointer; }
+        .round-by-round { margin-top: 20px; }
+        .round { margin: 5px 0; padding: 8px; background: var(--bg-dark); border-radius: 3px; font-family: monospace; font-size: 14px; border: 1px solid var(--border-color); }
+        
+        /* Custom scrollbar for gallery */
+        #galleryContainer::-webkit-scrollbar { width: 8px; }
+        #galleryContainer::-webkit-scrollbar-track { background: var(--bg-dark); border-radius: 4px; }
+        #galleryContainer::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
+        #galleryContainer::-webkit-scrollbar-thumb:hover { background: var(--primary-color); }
+        .main-content { max-width: 1200px; margin: 20px auto; padding: 15px; }
+
+        /* Participant checklist (Players / Bots / Practice). Scoped + !important so the global
+           `label { display:block }` and the gallery container's grid don't break the layout. */
+        .part-grid { display: grid !important; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; align-items: start; text-align: left; }
+        .part-col { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; min-width: 0; }
+        .part-col-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border-color); }
+        .part-col-head h5 { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .part-row { display: flex !important; align-items: center; gap: 8px; padding: 5px 2px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+        /* The global `input { width:100% }` rule makes the checkbox fill the whole row and hide
+           the label — force it back to its intrinsic size. */
+        .part-row input[type=checkbox] { flex: 0 0 auto; width: auto !important; margin: 0; }
+        .part-row label { display: inline-block; flex: 1 1 auto; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; color: var(--text-primary); font-weight: 500; }
+        .part-row label small { color: var(--text-secondary); }
+        .part-row input[type=number] { flex: 0 0 auto; width: 50px !important; padding: 2px 4px; }
+        .part-empty { color: var(--text-secondary); padding: 6px 0; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="{{ url_for('static', filename='js/csp_delegation.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/os_sim_render.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/pd_results_render.js') }}"></script>
+</head>
+<body>
+    {% include 'navbar.html' %}
+    <div class="main-content" style="margin: 40px; max-width: none;">
+
+    <!-- Important Rules Section -->
+    <div class="strategy" style="border-left: 4px solid var(--warning-color);">
+        <h3 style="color: var(--warning-color) !important;"><i class="fas fa-exclamation-triangle"></i> Important Rules</h3>
+        <ul style="text-align: left; margin: 10px 0; padding-left: 20px;">
+            <li><strong>One signature works everywhere:</strong> The recommended, unified signature runs in <strong>all three modes</strong> — 1v1, N-Player, and OS Simulation. If your strategy is named "myStrategy", write:<br>
+                <code>def myStrategy(last_moves, my_history, opponents_histories, meta):</code>
+                <ul style="margin: 6px 0 0 0; padding-left: 18px;">
+                    <li><code>last_moves</code> — list of each opponent's last move (in 1v1 / OS sim this is a single-element list; empty on the first round).</li>
+                    <li><code>my_history</code> — your own past moves; <code>opponents_histories</code> — a list of per-opponent move histories.</li>
+                    <li><code>meta['round']</code> — current round number (starts at 0).</li>
+                    <li><code>meta['rng']</code> — a <strong>seeded</strong> random generator; use <code>meta['rng'].random()</code> or <code>meta['rng'].randint(0, 1)</code> so runs stay reproducible (preferred over the bare <code>randint</code>).</li>
+                    <li><code>meta['tournament_info']</code> — context dict (ranking <code>weights</code>, active <code>modes</code>, <code>n_players</code>); <code>meta['player_index']</code> and <code>meta['n_players']</code> — your seat and the group size.</li>
+                </ul>
+            </li>
+            <li><strong>Function Name Must Match Strategy Name:</strong> the function name must equal the strategy name you enter.</li>
+            <li><strong>Return Only 'C' or 'D':</strong> Return exactly <code>'C'</code> to cooperate (yield the CPU) or <code>'D'</code> to defect (keep running). Any other value fails the strategy.</li>
+            <li><strong>Handle the first round:</strong> on the first round <code>last_moves</code> is an empty list (no history yet).</li>
+            <li><strong>Legacy 3-arg form still accepted:</strong> the older <code>def myStrategy(opponent_last_move, my_history, opponent_history)</code> still works (it sees all opponents as one aggregated opponent; <code>opponent_last_move</code> is <code>None</code> on the first round). A separate <code>myStrategy_nplayer</code> companion is <strong>no longer required</strong>, though it is still honoured if present.</li>
+            <li><strong>Perfect Python Syntax Required:</strong> Any syntax error causes your strategy to fail completely.</li>
+            <li><strong>Random choices:</strong> a bare <code>randint(0, 1)</code> is available in every mode, but prefer <code>meta['rng'].randint(0, 1)</code> / <code>meta['rng'].random()</code> so seeded runs stay reproducible.</li>
+            <li><strong>Whitelisted libraries:</strong> you may <code>import</code> only these standard modules (same in all three modes): <code>math, random, collections, itertools, functools, statistics, heapq, bisect, copy, operator, fractions, decimal, enum, typing, dataclasses, string, re, abc, contextlib, numbers</code>. Anything else (e.g. <code>os</code>, <code>sys</code>, <code>socket</code>, file/network access) is blocked, and only a restricted set of builtins is available (<code>abs, all, any, bool, complex, divmod, enumerate, filter, float, int, len, list, map, max, min, pow, range, reversed, round, set, sorted, str, sum, tuple, zip, dict</code>).</li>
+            <li><strong>OS Simulation specifics:</strong> practice runs are capped at <strong>4 strategies</strong>. <em>Homogeneous</em> benchmarks each strategy across all cores; <em>Heterogeneous</em> evaluates <strong>every</strong> combination of your strategies across the cores (so it needs at least as many strategies as cores).</li>
+            <li><strong>Strategy Names Must Be Unique:</strong> Each strategy must have a different name.</li>
+        </ul>
+        <div style="background: rgba(16, 185, 129, 0.1); padding: 10px; border-radius: 5px; margin-top: 10px; border: 1px solid var(--success-color);">
+            <strong style="color: var(--success-color);"><i class="fas fa-lightbulb"></i> Example (Tit-for-Tat, works in every mode):</strong><br>
+            <code style="display: block; margin-top: 5px; padding: 8px;">def TitForTat(last_moves, my_history, opponents_histories, meta):<br>&nbsp;&nbsp;&nbsp;&nbsp;return last_moves[0] if last_moves else 'C'</code>
+        </div>
+    </div>
+
+    <!-- Shared "How it works" explainer (modes + scoring) -->
+    {% include '_game_info.html' %}
+
+    <div class="tabs" style="margin-top: 20px;">
+        <div class="tab active" data-action="switchPracticeTab" data-arg="practice1v1">1 vs 1 Practice</div>
+        <div class="tab" data-action="switchPracticeTab" data-arg="practiceNplayer">N-Player Practice</div>
+        <div class="tab" data-action="switchPracticeTab" data-arg="practiceOS">OS Simulation</div>
+    </div>
+
+    <!-- 1v1 Practice Section -->
+    <div id="practice1v1Tab" class="tab-content active">
+    <div class="strategy" style="border-left: 4px solid var(--primary-color);">
+        <h3 style="color: var(--primary-color) !important;"><i class="fas fa-user-group"></i> 1v1 Practice</h3>
+
+        <!-- Configuration -->
+        <h4 style="color: var(--primary-color) !important;">Configuration</h4>
+
+        <!-- Payoff Matrix Configuration -->
+        <div style="margin-bottom: 25px;">
+            <label style="display: block; margin-bottom: 8px; font-weight: bold;">Payoff Matrix</label>
+            <p>Configure the rewards for each outcome (Player A, Player B):</p>
+            <div class="table-responsive">
+            <table style="margin: 20px auto; border-collapse: collapse;">
+                <thead>
+                    <tr>
+                        <th style="padding: 10px;"></th>
+                        <th style="padding: 10px;">Opponent Cooperates</th>
+                        <th style="padding: 10px;">Opponent Defects</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <th style="padding: 10px;">You Cooperate</th>
+                        <td style="padding: 10px;">
+                            (<input type="number" id="cc_a" value="3" style="width: 60px; padding: 10px 5px;">, 
+                             <input type="number" id="cc_b" value="3" style="width: 60px; padding: 10px 5px;">)
+                        </td>
+                        <td style="padding: 10px;">
+                            (<input type="number" id="cd_a" value="0" style="width: 60px; padding: 10px 5px;">, 
+                             <input type="number" id="cd_b" value="5" style="width: 60px; padding: 10px 5px;">)
+                        </td>
+                    </tr>
+                    <tr>
+                        <th style="padding: 10px;">You Defect</th>
+                        <td style="padding: 10px;">
+                            (<input type="number" id="dc_a" value="5" style="width: 60px; padding: 10px 5px;">, 
+                             <input type="number" id="dc_b" value="0" style="width: 60px; padding: 10px 5px;">)
+                        </td>
+                        <td style="padding: 10px;">
+                            (<input type="number" id="dd_a" value="1" style="width: 60px; padding: 10px 5px;">, 
+                             <input type="number" id="dd_b" value="1" style="width: 60px; padding: 10px 5px;">)
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+            </div>
+            <div style="text-align: center; margin-top: 10px;">
+                <button data-action="resetPayoffMatrix" style="background: var(--warning-color); color: white;">Reset to Default</button>
+            </div>
+        </div>
+        
+        <!-- Tournament Start Controls (full-width, left-aligned to mirror N-player) -->
+        <div style="padding-top: 15px; border-top: 1px solid var(--border-color);">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; max-width: 460px;">
+                <div>
+                    <label style="display: block; margin-bottom: 5px; font-weight: bold;">Rounds per match:</label>
+                    <input type="number" id="rounds" value="200" style="width: 100%; padding: 8px;">
+                </div>
+                <div>
+                    <label style="display: block; margin-bottom: 5px; font-weight: bold;">Seed (optional):</label>
+                    <input type="number" id="seed" placeholder="Random" style="width: 100%; padding: 8px;">
+                    <small style="color: var(--text-secondary);">Set for reproducible runs</small>
+                </div>
+            </div>
+
+            <!-- Game Modes (1v1 supports the same modes as N-player) -->
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 10px; font-weight: bold;">Game Modes:</label>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px;">
+                    <div><input type="checkbox" id="mode_standard" checked> <label for="mode_standard">Standard</label></div>
+                    <div><input type="checkbox" id="mode_discounted"> <label for="mode_discounted">Discounted</label></div>
+                    <div><input type="checkbox" id="mode_stochastic"> <label for="mode_stochastic">Stochastic</label></div>
+                    <div><input type="checkbox" id="mode_random"> <label for="mode_random">Random Ite.</label></div>
+                </div>
+                <div style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                    <div>
+                        <label>Discount Factor:</label>
+                        <input type="number" id="discount_factor" value="0.95" step="0.01" style="width: 80px;">
+                    </div>
+                    <div>
+                        <label>Stochastic Prob:</label>
+                        <input type="number" id="stochastic_prob" value="0.995" step="0.005" style="width: 80px;">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="strategiesContainer">
+            <!-- Strategies will be dynamically added here -->
+        </div>
+
+        <div style="text-align: center; margin: 20px;">
+            <button data-action="addStrategy" style="background: var(--primary-color); color: white;"><i class="fas fa-plus"></i> Add Strategy</button>
+            <button data-action="removeLastStrategy" style="background: var(--danger-color); color: white;"><i class="fas fa-minus"></i> Remove Last Strategy</button>
+        </div>
+
+        <div style="text-align: center; margin: 10px 0;">
+            <small style="color: var(--text-secondary);">
+                <span id="strategyCountDisplay">0</span> strategies (no limit — runs on your machine)
+            </small>
+        </div>
+
+        <!-- Strategy Gallery (1v1) -->
+        <div style="border-top: 1px solid var(--border-color); padding-top: 15px; margin-top: 10px;">
+            <h4 style="color: var(--success-color) !important;"><i class="fas fa-images"></i> Strategy Gallery</h4>
+            <p style="margin-top: 0;">Load previously saved strategies into your 1v1 tournament:</p>
+            <div style="margin-bottom: 15px;">
+                <button data-action="refreshGallery" data-arg="1v1" data-arg2="galleryContainer" data-arg3="galleryStatus" style="background: var(--success-color); color: white;">
+                    <i class="fas fa-sync"></i> Refresh Gallery
+                </button>
+                <span id="galleryStatus" style="margin-left: 10px; font-style: italic; color: var(--text-secondary);"></span>
+            </div>
+            <div id="galleryContainer" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px; max-height: 400px; overflow-y: auto; padding: 15px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-dark);">
+                <!-- Gallery strategies will be loaded here -->
+            </div>
+        </div>
+
+        <!-- Start (bottom, mirrors N-player) -->
+        <div style="text-align: center; margin-top: 30px;">
+            <button data-action="startTournament" id="tournamentBtn" style="background: var(--success-color); color: white; font-size: 1.1em; padding: 15px 30px;"><i class="fas fa-play"></i> Start Round Robin Tournament</button>
+        </div>
+
+        <!-- Tournament Results (bottom, mirrors N-player & OS sim) -->
+        <div id="results"></div>
+        <div id="submitPanel" style="display:none;"></div>
+    </div>
+    </div><!-- /practice1v1Tab -->
+
+    <!-- N-Player Practice Section -->
+    <div id="practiceNplayerTab" class="tab-content">
+    <div class="strategy" style="border-left: 4px solid var(--primary-color); margin-top: 40px;">
+        <h3 style="color: var(--primary-color) !important;"><i class="fas fa-users"></i> N-Player Practice</h3>
+        
+        <!-- Controls -->
+        <div style="margin-bottom: 25px;">
+            <h4 style="color: var(--primary-color) !important;">Configuration</h4>
+            
+            <!-- Game Parameters -->
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px;">
+                <div>
+                    <label style="display: block; margin-bottom: 5px; font-weight: bold;">Rounds:</label>
+                     <input type="number" id="np_rounds" value="200" max="1000" style="width: 100%; padding: 8px;">
+                     <small style="color: var(--text-secondary);">Max 1000</small>
+                </div>
+                <div>
+                     <label style="display: block; margin-bottom: 5px; font-weight: bold;">Group Size:</label>
+                     <input type="number" id="np_group_size" placeholder="All players" min="2" style="width: 100%; padding: 8px;">
+                     <small style="color: var(--text-secondary);">Empty = all players</small>
+                </div>
+                <div>
+                     <label style="display: block; margin-bottom: 5px; font-weight: bold;">Seed:</label>
+                     <input type="number" id="np_seed" placeholder="Random" style="width: 100%; padding: 8px;">
+                </div>
+            </div>
+
+            <!-- Modes -->
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 10px; font-weight: bold;">Game Modes:</label>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px;">
+                    <div><input type="checkbox" id="np_mode_standard" checked> <label for="np_mode_standard">Standard</label></div>
+                    <div><input type="checkbox" id="np_mode_discounted"> <label for="np_mode_discounted">Discounted</label></div>
+                    <div><input type="checkbox" id="np_mode_stochastic"> <label for="np_mode_stochastic">Stochastic</label></div>
+                    <div><input type="checkbox" id="np_mode_random"> <label for="np_mode_random">Random Ite.</label></div>
+                </div>
+                <div style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                     <div>
+                        <label>Discount Factor:</label>
+                        <input type="number" id="np_discount_factor" value="0.95" step="0.01" style="width: 80px;">
+                     </div>
+                     <div>
+                        <label>Stochastic Prob:</label>
+                        <input type="number" id="np_stochastic_prob" value="0.995" step="0.005" style="width: 80px;">
+                     </div>
+                </div>
+            </div>
+
+            <!-- Payoff Model -->
+            <div style="border-top: 1px solid var(--border-color); padding-top: 15px;">
+                <label style="display: block; margin-bottom: 8px; font-weight: bold;">Payoff Model:</label>
+                <select id="np_payoff_type" data-action="toggleNPlayerPayoffFieldsPractice" data-on="change" style="width: 100%; padding: 8px; margin-bottom: 15px;">
+                    <option value="public_goods">Public Goods</option>
+                    <option value="pairwise_matrix">Pairwise Matrix</option>
+                    <option value="kcoop_tensor">K-Cooperator Tensor</option>
+                </select>
+
+                <!-- Public Goods Fields -->
+                <div id="np_pg_fields">
+                    <div style="display: flex; gap: 15px; margin-bottom: 10px;">
+                        <div style="flex: 1;"><label>Benefit (b):</label><input type="number" id="np_pg_b" value="2.0" step="0.1" style="width: 100%;"></div>
+                        <div style="flex: 1;"><label>Cost (c):</label><input type="number" id="np_pg_c" value="1.0" step="0.1" style="width: 100%;"></div>
+                        <div style="flex: 1;">
+                            <label>Nonlinear:</label>
+                            <select id="np_pg_nonlinear" style="width: 100%;" data-action="toggleNPlayerAlphaFieldPractice" data-on="change">
+                                <option value="linear">Linear</option>
+                                <option value="power">Power</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="np_pg_alpha_field" style="display: none;">
+                        <label>Alpha:</label> <input type="number" id="np_pg_alpha" value="1.5" step="0.1" style="width: 100px;">
+                    </div>
+                </div>
+
+                <!-- Pairwise Fields -->
+                 <div id="np_pm_fields" style="display: none;">
+                    <label>Aggregation:</label>
+                    <select id="np_pm_agg" style="width: 100%; margin-bottom: 10px;">
+                        <option value="sum">Sum</option>
+                        <option value="avg">Average</option>
+                    </select>
+                    <label style="display: block; margin-bottom: 6px; font-weight: bold;">Payoff Matrix (Player A, Player B):</label>
+                    <div class="table-responsive">
+                    <table style="margin: 0 0 6px 0; border-collapse: collapse;">
+                        <thead><tr><th style="padding:6px;"></th><th style="padding:6px;">Opp. Cooperates</th><th style="padding:6px;">Opp. Defects</th></tr></thead>
+                        <tbody>
+                            <tr>
+                                <th style="padding:6px;">You Cooperate</th>
+                                <td style="padding:6px;">(<input type="number" id="np_pm_cc_a" value="3" style="width:72px; padding:8px 5px;">, <input type="number" id="np_pm_cc_b" value="3" style="width:72px; padding:8px 5px;">)</td>
+                                <td style="padding:6px;">(<input type="number" id="np_pm_cd_a" value="0" style="width:72px; padding:8px 5px;">, <input type="number" id="np_pm_cd_b" value="5" style="width:72px; padding:8px 5px;">)</td>
+                            </tr>
+                            <tr>
+                                <th style="padding:6px;">You Defect</th>
+                                <td style="padding:6px;">(<input type="number" id="np_pm_dc_a" value="5" style="width:72px; padding:8px 5px;">, <input type="number" id="np_pm_dc_b" value="0" style="width:72px; padding:8px 5px;">)</td>
+                                <td style="padding:6px;">(<input type="number" id="np_pm_dd_a" value="1" style="width:72px; padding:8px 5px;">, <input type="number" id="np_pm_dd_b" value="1" style="width:72px; padding:8px 5px;">)</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    </div>
+                    <p style="font-size: 0.8em; color: var(--text-secondary);">Each player plays this 2-player matrix against every other; per-round results are aggregated (sum/avg).</p>
+                 </div>
+
+                 <!-- Tensor Fields -->
+                 <div id="np_kc_fields" style="display: none;">
+                    <label>u_C (JSON):</label> <input type="text" id="np_kc_uc" placeholder="[0,3,7...]" style="width: 100%; margin-bottom: 5px;">
+                    <label>u_D (JSON):</label> <input type="text" id="np_kc_ud" placeholder="[0,4,8...]" style="width: 100%;">
+                 </div>
+            </div>
+        </div>
+
+        <div id="npStrategiesContainer"></div>
+
+        <div style="text-align: center; margin: 20px;">
+            <button data-action="addNpStrategy" style="background: var(--primary-color); color: white;"><i class="fas fa-plus"></i> Add Strategy</button>
+            <button data-action="removeLastNpStrategy" style="background: var(--danger-color); color: white;"><i class="fas fa-minus"></i> Remove Last</button> 
+             <div style="margin-top: 5px; font-size: 0.9em; color: var(--text-secondary);">
+                <span id="npStrategyCountDisplay">0</span> strategies (no limit — runs on your machine)
+            </div>
+        </div>
+
+        <!-- Strategy Gallery (N-player, reuses the same saved strategies) -->
+        <div style="border-top: 1px solid var(--border-color); padding-top: 15px; margin-top: 10px;">
+            <h4 style="color: var(--success-color) !important;"><i class="fas fa-images"></i> Strategy Gallery</h4>
+            <p style="margin-top: 0;">Load previously saved strategies into your N-player tournament.
+                <span style="color: var(--text-secondary); font-size: 0.9em;">2-player strategies are adapted automatically (each opponent group is seen as one aggregated opponent).</span>
+            </p>
+            <div style="margin-bottom: 15px;">
+                <button data-action="refreshGallery" data-arg="nplayer" data-arg2="npGalleryContainer" data-arg3="npGalleryStatus" style="background: var(--success-color); color: white;">
+                    <i class="fas fa-sync"></i> Refresh Gallery
+                </button>
+                <span id="npGalleryStatus" style="margin-left: 10px; font-style: italic; color: var(--text-secondary);"></span>
+            </div>
+            <div id="npGalleryContainer" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px; max-height: 400px; overflow-y: auto; padding: 15px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-dark);">
+                <!-- Gallery strategies will be loaded here -->
+            </div>
+        </div>
+
+        <div style="text-align: center; margin-top: 30px;">
+             <button data-action="startNPlayerTournament" style="background: var(--success-color); color: white; padding: 15px 30px; font-size: 1.1em;">
+                <i class="fas fa-play"></i> Start N-Player Tournament
+             </button>
+        </div>
+    </div>
+
+    <div id="nplayerResults"></div>
+    <div id="npSubmitPanel" style="display:none;"></div>
+    </div><!-- /practiceNplayerTab -->
+
+    <!-- OS Simulation Practice Section -->
+    <div id="practiceOSTab" class="tab-content">
+    <div class="strategy" style="border-left: 4px solid var(--primary-color); margin-top: 40px;">
+        <h3 style="color: var(--primary-color) !important;"><i class="fas fa-microchip"></i> OS Simulation</h3>
+        <p style="margin-top: 0;">Benchmark your strategies as CPU-core scheduling personalities. Each
+            submitted strategy runs on the cores (homogeneous: one strategy across all cores;
+            heterogeneous: every combination of strategies across the cores); the chosen scheduler
+            interprets each Cooperate (yield) / Defect (keep running) move natively. See
+            <em>How it works — modes &amp; scoring</em> above for details.</p>
+
+        <h4 style="color: var(--primary-color) !important;">Configuration</h4>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px;">
+            <div>
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Number of Cores:</label>
+                <input type="number" id="os_num_cores" value="2" min="2" max="8" style="width: 100%; padding: 8px;">
+                <small style="color: var(--text-secondary);">2–8 cores</small>
+            </div>
+            <div>
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Core Assignment:</label>
+                <select id="os_assignment" style="width: 100%; padding: 8px;">
+                    <option value="homogeneous">Homogeneous (all cores one strategy)</option>
+                    <option value="heterogeneous">Heterogeneous (each strategy at most once)</option>
+                </select>
+            </div>
+            <div>
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Scheduler:</label>
+                <select id="os_scheduler" style="width: 100%; padding: 8px;">
+                    <option value="round_robin">Round Robin</option>
+                    <option value="fcfs">FCFS (baseline)</option>
+                    <option value="sjf">SJF / SRTF</option>
+                    <option value="priority">Priority</option>
+                    <option value="mlfq">MLFQ</option>
+                    <option value="cfs">CFS (fair share)</option>
+                    <option value="affinity">Affinity-aware</option>
+                </select>
+            </div>
+            <div>
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Seed (optional):</label>
+                <input type="number" id="os_seed" placeholder="Random" style="width: 100%; padding: 8px;">
+            </div>
+        </div>
+
+        <div id="osStrategiesContainer"></div>
+
+        <div style="text-align: center; margin: 20px;">
+            <button data-action="addOsStrategy" style="background: var(--primary-color); color: white;"><i class="fas fa-plus"></i> Add Strategy</button>
+            <button data-action="removeLastOsStrategy" style="background: var(--danger-color); color: white;"><i class="fas fa-minus"></i> Remove Last</button>
+            <div style="margin-top: 5px; font-size: 0.9em; color: var(--text-secondary);">
+                <span id="osStrategyCountDisplay">0</span> strategies (no limit — runs on your machine)
+            </div>
+        </div>
+
+        <!-- Strategy Gallery (OS sim) -->
+        <div style="border-top: 1px solid var(--border-color); padding-top: 15px; margin-top: 10px;">
+            <h4 style="color: var(--success-color) !important;"><i class="fas fa-images"></i> Strategy Gallery</h4>
+            <p style="margin-top: 0;">Load previously saved strategies as core personalities for your OS simulation:</p>
+            <div style="margin-bottom: 15px;">
+                <button data-action="refreshGallery" data-arg="os" data-arg2="osGalleryContainer" data-arg3="osGalleryStatus" style="background: var(--success-color); color: white;">
+                    <i class="fas fa-sync"></i> Refresh Gallery
+                </button>
+                <span id="osGalleryStatus" style="margin-left: 10px; font-style: italic; color: var(--text-secondary);"></span>
+            </div>
+            <div id="osGalleryContainer" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px; max-height: 400px; overflow-y: auto; padding: 15px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-dark);">
+                <!-- Gallery strategies will be loaded here -->
+            </div>
+        </div>
+
+        <div style="text-align: center; margin-top: 30px;">
+            <button data-action="startOSSimulation" id="osSimBtn" style="background: var(--success-color); color: white; padding: 15px 30px; font-size: 1.1em;">
+                <i class="fas fa-microchip"></i> Run OS Simulation
+            </button>
+        </div>
+    </div>
+
+    <div id="osResults"></div>
+    <div id="osSubmitPanel" style="display:none;"></div>
+    </div><!-- /practiceOSTab -->
+
+    <!-- Match Details Modal -->
+    <div id="matchModal" class="modal">
+        <div class="modal-content">
+            <span class="close" data-action="closeMatchModal">&times;</span>
+            <div id="matchModalContent"></div>
+        </div>
+    </div>
+
+    <script nonce="{{ csp_nonce }}">
+        // Role flag (from server session) — admins are uncapped and may curate the gallery
+        const isAdmin = {{ 'true' if session.get('user', {}).get('role') == 'admin' else 'false' }};
+
+        // When the server session expires, @login_required redirects API calls (302) to the login
+        // page, so a fetch() silently receives the login HTML instead of JSON. Detect that and send
+        // the browser to /login (matching the admin page) rather than failing with a parse error.
+        async function readJsonOrRedirect(response) {
+            const contentType = (response && response.headers && response.headers.get('content-type')) || '';
+            if (response && (response.redirected || contentType.includes('text/html'))) {
+                try { window.location = response.url || '/login'; } catch (e) { /* ignore */ }
+                throw new Error('Session expired — redirecting to login…');
+            }
+            if (!contentType.includes('application/json')) {
+                let snippet = '';
+                try { snippet = (await response.text() || '').slice(0, 200); } catch (e) { /* ignore */ }
+                throw new Error('Unexpected server response (non-JSON).' + (snippet ? (' ' + snippet) : ''));
+            }
+            return await response.json();
+        }
+
+        // Practice Mode Caps. Practice is capped at 4 strategies for EVERYONE (admins included)
+        // so a co-located class can't overload the single free-tier worker. Server enforces these too.
+        const MAX_PRACTICE_STRATEGIES = 4;
+        const MAX_PRACTICE_ROUNDS = 250;
+        const MAX_NPLAYER_STRATEGIES = 4;
+        const effectiveMaxStrategies = MAX_PRACTICE_STRATEGIES;
+        const effectiveMaxNplayer = MAX_NPLAYER_STRATEGIES;
+
+        // (No "/ N" max counters any more — every mode runs uncapped on the user's machine.)
+
+        // Top-level practice tabs (1v1 / N-Player).
+        function switchPracticeTab(tabName) {
+            document.querySelectorAll('.main-content > .tabs .tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('#practice1v1Tab, #practiceNplayerTab, #practiceOSTab').forEach(c => c.classList.remove('active'));
+            document.querySelectorAll('.main-content > .tabs .tab').forEach(t => {
+                if (t.dataset.arg === tabName) t.classList.add('active');
+            });
+            const content = document.getElementById(tabName + 'Tab');
+            if (content) content.classList.add('active');
+        }
+
+        // Existing JS logic remains...
+        // Unified 4-arg signature — the same function runs in 1v1, N-Player and OS Simulation.
+        const examples = {
+            titfortat: `def STRATEGY_NAME(last_moves, my_history, opponents_histories, meta):
+    return last_moves[0] if last_moves else 'C'`,
+            random: `def STRATEGY_NAME(last_moves, my_history, opponents_histories, meta):
+    return 'C' if randint(0, 1) else 'D'`,
+            cooperate: `def STRATEGY_NAME(last_moves, my_history, opponents_histories, meta):
+    return 'C'`,
+            defect: `def STRATEGY_NAME(last_moves, my_history, opponents_histories, meta):
+    return 'D'`
+        };
+        // ... (keeping the rest of the JS logic identical but just updating style strings in JS) ...
+        
+        // Helper to update styles in JS generated content
+        function getPayoffMatrix() {
+             return {
+                'CC': [parseInt(document.getElementById('cc_a').value), parseInt(document.getElementById('cc_b').value)],
+                'CD': [parseInt(document.getElementById('cd_a').value), parseInt(document.getElementById('cd_b').value)],
+                'DC': [parseInt(document.getElementById('dc_a').value), parseInt(document.getElementById('dc_b').value)],
+                'DD': [parseInt(document.getElementById('dd_a').value), parseInt(document.getElementById('dd_b').value)]
+            };
+        }
+        
+        function resetPayoffMatrix() {
+            document.getElementById('cc_a').value = 3;
+            document.getElementById('cc_b').value = 3;
+            document.getElementById('cd_a').value = 0;
+            document.getElementById('cd_b').value = 5;
+            document.getElementById('dc_a').value = 5;
+            document.getElementById('dc_b').value = 0;
+            document.getElementById('dd_a').value = 1;
+            document.getElementById('dd_b').value = 1;
+        }
+
+        let strategyCount = 0;
+        let currentTournamentResult = null;
+
+        function addStrategy() {
+            // No strategy cap on the local app — it's your own machine. (A pre-run estimate
+            // warns about the work.) Rows added here are your editable LOCAL players (registered
+            // as bots on publish); website players/practice are chosen via the participant checklist.
+            strategyCount++;
+            document.getElementById('strategyCountDisplay').textContent = strategyCount;
+            const container = document.getElementById('strategiesContainer');
+            const strategyDiv = document.createElement('div');
+            strategyDiv.className = 'strategy';
+            strategyDiv.id = `strategy${strategyCount}`;
+            strategyDiv.dataset.source = 'local';
+
+            strategyDiv.innerHTML = `
+                <h3>Strategy ${strategyCount}</h3>
+                <label>Function Name:
+                    <input type="text" id="strategyName${strategyCount}" value="house_bot_${strategyCount}" data-action="updateExamples" data-arg="${strategyCount}" data-on="change">
+                </label>
+                <br><br>
+                <textarea id="strategyCode${strategyCount}"></textarea>
+                <div id="examples${strategyCount}" class="examples"></div>
+                <div style="margin-top: 10px;">
+                    <button data-action="loadExample" data-arg="${strategyCount}" data-arg2="titfortat" style="background: #9333ea; color: white; padding: 5px 10px; font-size: 12px;">Tit-for-Tat</button>
+                    <button data-action="loadExample" data-arg="${strategyCount}" data-arg2="random" style="background: #9333ea; color: white; padding: 5px 10px; font-size: 12px;">Random</button>
+                    <button data-action="loadExample" data-arg="${strategyCount}" data-arg2="cooperate" style="background: #9333ea; color: white; padding: 5px 10px; font-size: 12px;">Always Cooperate</button>
+                    <button data-action="loadExample" data-arg="${strategyCount}" data-arg2="defect" style="background: #9333ea; color: white; padding: 5px 10px; font-size: 12px;">Always Defect</button>
+                </div>
+                ${isAdmin ? `
+                <div style="margin-top: 10px; text-align: center;">
+                    <button data-action="saveStrategyToGallery" data-arg="${strategyCount}" style="background: var(--success-color); color: white; padding: 8px 16px; font-size: 12px;">
+                        <i class="fas fa-save"></i> Save to Gallery
+                    </button>
+                </div>` : ''}
+            `;
+            
+            container.appendChild(strategyDiv);
+            updateExamples(strategyCount);
+        }
+
+        function removeLastStrategy() {
+            if (strategyCount > 0) {
+                const strategyDiv = document.getElementById(`strategy${strategyCount}`);
+                if (strategyDiv) {
+                    strategyDiv.remove();
+                    strategyCount--;
+                    document.getElementById('strategyCountDisplay').textContent = strategyCount;
+                }
+            }
+        }
+
+        function loadExample(strategyId, exampleType) {
+            const functionName = document.getElementById(`strategyName${strategyId}`).value;
+            const code = examples[exampleType].replace('STRATEGY_NAME', functionName);
+            document.getElementById(`strategyCode${strategyId}`).value = code;
+        }
+
+        function updateExamples(strategyId) {
+            // cleared
+        }
+
+        function loadDefaultStrategies() {
+            addStrategy();
+            loadExample(1, 'titfortat');
+            addStrategy();
+            loadExample(2, 'random');
+        }
+        
+        // ... (rest of functions remain mostly same logic, just minor style tweaks in innerHTML) ...
+
+        // --- Shared helpers for the "practice = tournament" workflow ---
+        let lastRoster1v1 = null;
+
+        // Rough pre-run estimate so a big roster doesn't surprise the user. No hard cap.
+        function nCr(n, k) {
+            if (k < 0 || k > n) return 0;
+            k = Math.min(k, n - k);
+            let r = 1;
+            for (let i = 0; i < k; i++) r = r * (n - i) / (i + 1);
+            return Math.round(r);
+        }
+        function confirmWorkload(kind, n, rounds, modes, extra) {
+            let desc, decisions;
+            if (kind === 'nplayer') {
+                desc = `${n} players · ${modes} mode(s) × ${rounds} rounds`;
+                decisions = rounds * modes * Math.max(2, n);
+            } else if (kind === 'os') {
+                const cores = (extra && extra.numCores) || 2;
+                // Homogeneous = one run per strategy; heterogeneous enumerates C(n, cores) mixtures.
+                const comb = (extra && extra.assignment === 'heterogeneous') ? nCr(n, cores) : n;
+                desc = `${comb.toLocaleString()} core-assignment combination(s) on ${cores} cores · ${n} strategies`;
+                decisions = comb * cores * 300;   // ~300 ticks per run, rough
+            } else {
+                const matches = (n * (n - 1) / 2) * modes;
+                desc = `${matches.toLocaleString()} matches × ${rounds} rounds`;
+                decisions = matches * rounds * 2;
+            }
+            const secs = Math.max(1, Math.round(decisions / 40000));   // ~40k moves/sec, rough
+            const t = secs < 90 ? `about ${secs}s` : `about ${Math.round(secs / 60)} min`;
+            return confirm(`You're about to simulate ${desc} on this machine `
+                + `(~${decisions.toLocaleString()} moves). With your hardware this will take ${t}. Continue?`);
+        }
+
+        // After a run, offer to publish to the website (handoff). Shown for all modes.
+        function showSubmitPanel(kind, result, roster) {
+            const panelId = kind === 'nplayer' ? 'npSubmitPanel' : (kind === 'os' ? 'osSubmitPanel' : 'submitPanel');
+            const el = document.getElementById(panelId);
+            if (!el) return;
+            // Only your own local players are registered as bots. Player submissions and organizer
+            // practice strategies are already known on the website, so they are NOT re-registered.
+            const locals = (roster || []).filter(r => r.source === 'local').length;
+            el.style.display = 'block';
+            // Per-mode element ids so the 1v1 / N-Player / OS-sim panels don't collide.
+            el.innerHTML = `
+              <div class="results" style="border:1px solid var(--info-color); margin-top:20px;">
+                <h3><i class="fas fa-cloud-arrow-up"></i> Submit results to website (admin)</h3>
+                <p>Publishes this tournament to the website. ${locals} local player(s) will be saved there
+                as bots (player submissions and practice strategies are not re-registered). You'll log in
+                on the website and choose post-now or schedule.</p>
+                <input type="text" id="submitName_${kind}" placeholder="Tournament name" value="Tournament"
+                       style="width:55%; padding:8px; margin-right:8px;">
+                <button id="submitResultsBtn_${kind}" style="background: var(--success-color); color:white; padding:10px 18px;">
+                    <i class="fas fa-cloud-arrow-up"></i> Submit to website</button>
+                <div id="submitStatus_${kind}" style="margin-top:10px;"></div>
+              </div>`;
+            document.getElementById(`submitResultsBtn_${kind}`).addEventListener('click', () => submitResults(kind, result, roster));
+        }
+
+        async function submitResults(kind, result, roster) {
+            const status = document.getElementById(`submitStatus_${kind}`);
+            const name = (document.getElementById(`submitName_${kind}`).value || 'Tournament').trim();
+            const participants = (roster || []).map(r => {
+                const p = { name: r.name, source: r.source };
+                if (r.source === 'website' && r.website_id) p.website_id = r.website_id;
+                return p;
+            });
+            // Only your own local players become bots (deduped by code on the website). Practice
+            // strategies and player submissions are NOT re-registered as bots.
+            const local_bots = (roster || []).filter(r => r.source === 'local')
+                .map(r => ({ name: r.name, code: r.code }));
+            const pkg = { kind, name, result, participants, local_bots };
+            status.textContent = 'Staging to website…';
+            try {
+                const resp = await fetch('/hub/publish-result', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pkg) });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.error || 'Publish failed');
+                window.open(data.publish_url, '_blank');
+                status.innerHTML = '<span style="color:var(--success-color)">Opened the website publish page — log in (admin) and confirm.</span>';
+            } catch (e) { status.innerHTML = '<span style="color:var(--danger-color)">' + e.message + '</span>'; }
+        }
+
+        async function startTournament() {
+            const rounds = parseInt(document.getElementById('rounds').value) || 200;
+
+            // Roster = your editable local players + the participants ticked in the checklist
+            // (players/practice unique; bots may be replicated). Imported code is never edited.
+            const roster = collectLocalRows('strategy', strategyCount).concat(collectSelectedParticipants('1v1'));
+            const strategies = roster.map(r => ({ name: r.name, code: r.code }));
+            if (strategies.length < 2) { alert('Select at least 2 participants (tick players/practice/bots, or add your own local players)!'); return; }
+
+            // Collect selected game modes (default to standard if none checked)
+            const modes = [];
+            if (document.getElementById('mode_standard').checked) modes.push('standard');
+            if (document.getElementById('mode_discounted').checked) modes.push('discounted');
+            if (document.getElementById('mode_stochastic').checked) modes.push('stochastic');
+            if (document.getElementById('mode_random').checked) modes.push('random');
+            if (modes.length === 0) { alert('Please select at least one game mode!'); return; }
+
+            // No cap — but a large roster is real work, so warn with a rough estimate first.
+            if (!confirmWorkload('1v1', strategies.length, rounds, modes.length)) return;
+
+            function escapeHtml(unsafe) {
+                if (!unsafe) return '';
+                return String(unsafe).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+            }
+
+            const seedInput = document.getElementById('seed').value;
+            const tournamentData = {
+                strategies: strategies,
+                rounds: document.getElementById('rounds').value,
+                payoff_matrix: getPayoffMatrix(),
+                modes: modes,
+                discount_factor: parseFloat(document.getElementById('discount_factor').value),
+                stochastic_prob: parseFloat(document.getElementById('stochastic_prob').value),
+                seed: seedInput ? parseInt(seedInput) : null,
+            };
+            document.getElementById('results').innerHTML = '<div style="text-align: center; padding: 20px;"><i class="fas fa-spinner fa-spin"></i> Running tournament...</div>';
+
+            try {
+                const response = await fetch('/tournament', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(tournamentData) });
+                const result = await readJsonOrRedirect(response);
+                if (result.error) throw new Error(result.error);
+                currentTournamentResult = result;
+                lastRoster1v1 = roster;
+                displayTournamentResults(result);
+                showSubmitPanel('1v1', result, roster);
+            } catch (error) {
+                document.getElementById('results').innerHTML = `<div class="results" style="color: var(--danger-color);"><i class="fas fa-times-circle"></i> Error: ${escapeHtml(error.message)}</div>`;
+            }
+        }
+        
+        function displayTournamentResults(result) {
+            if (!result || !result.leaderboard) {
+                document.getElementById('results').innerHTML = `<div class="results" style="color: var(--danger-color);">Error: Invalid format</div>`;
+                return;
+            }
+            
+            // Helper function to escape HTML (prevents XSS)
+            function escapeHtml(unsafe) {
+                if (!unsafe) return '';
+                return String(unsafe)
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;")
+                    .replace(/'/g, "&#039;");
+            }
+            
+            // Weight logic
+            const currentWinWeight = document.getElementById('winWeight') ? document.getElementById('winWeight').value : 33;
+            const currentCoopWeight = document.getElementById('coopWeight') ? document.getElementById('coopWeight').value : 34;
+            const currentPointsWeight = document.getElementById('pointsWeight') ? document.getElementById('pointsWeight').value : 33;
+            
+            // Info line (mirrors the N-Player / OS-sim results header).
+            const modesText = (Array.isArray(result.modes) && result.modes.length)
+                ? `, Modes: ${result.modes.join(', ')}` : '';
+            const roundsText = result.rounds ? `, ${result.rounds} rounds` : '';
+            let html = `
+                <div class="results" style="border-left: 4px solid var(--primary-color);">
+                    <h3 style="color: var(--primary-color) !important;"><i class="fas fa-trophy"></i> 1v1 Results</h3>
+                    <div style="background: rgba(0,0,0,0.2); padding: 10px; margin-bottom: 20px;">
+                        <strong>Info:</strong> ${result.leaderboard.length} strategies, ${result.matches.length} matches${roundsText}${modesText}
+                    </div>`;
+
+            // Display disqualified strategies if any
+            if (result.disqualified && result.disqualified.length > 0) {
+                html += `
+                    <div style="background: rgba(220, 53, 69, 0.2); border: 2px solid var(--danger-color); padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                        <h4 style="margin: 0 0 10px 0; color: var(--danger-color);"><i class="fas fa-exclamation-triangle"></i> Disqualified Strategies</h4>
+                        <ul style="margin: 0; padding-left: 20px;">`;
+                result.disqualified.forEach(disq => {
+                    html += `<li><strong>${escapeHtml(disq.name)}</strong>: ${escapeHtml(disq.error)}</li>`;
+                });
+                html += `</ul></div>`;
+            }
+            
+            html += `
+                    <div class="leaderboard">
+                        <div style="background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                            <h4 style="margin: 0 0 10px 0;">Ranking Weights</h4>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px;">
+                                <div><label>Win Rate: <span id="winWeightValue">${currentWinWeight}</span>%</label><input type="range" id="winWeight" min="0" max="100" value="${currentWinWeight}" data-action="updateWeights" data-on="input" style="width: 100%;"></div>
+                                <div><label>Cooperation: <span id="coopWeightValue">${currentCoopWeight}</span>%</label><input type="range" id="coopWeight" min="0" max="100" value="${currentCoopWeight}" data-action="updateWeights" data-on="input" style="width: 100%;"></div>
+                                <div><label>Points: <span id="pointsWeightValue">${currentPointsWeight}</span>%</label><input type="range" id="pointsWeight" min="0" max="100" value="${currentPointsWeight}" data-action="updateWeights" data-on="input" style="width: 100%;"></div>
+                            </div>
+                            <div style="text-align: center; margin-top: 10px;">
+                                <span id="weightStatus" style="font-weight: bold; color: var(--success-color);">Total: 100% ✓</span>
+                                <button data-action="recalculateRanking" id="recalcBtn" style="margin-left: 15px; background: var(--primary-color); color: white;"><i class="fas fa-chart-bar"></i> Recalculate</button>
+                                <button data-action="resetWeights" style="margin-left: 10px; background: var(--warning-color); color: white;"><i class="fas fa-undo"></i> Reset</button>
+                            </div>
+                        </div>
+                        <h4>Leaderboard</h4>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Rank</th><th>Strategy</th><th>Score</th><th>Points</th><th>Wins</th><th>Coop %</th>
+                                </tr>
+                            </thead>
+                            <tbody>`;
+            
+            result.leaderboard.forEach((entry, index) => {
+                html += `<tr>
+                    <td>${index + 1}</td>
+                    <td>${escapeHtml(entry.name)}</td>
+                    <td>${entry.weighted_score ? entry.weighted_score.toFixed(2) : 'N/A'}</td>
+                    <td>${entry.total_points}</td>
+                    <td>${entry.wins}</td>
+                    <td>${entry.cooperation_percentage ? entry.cooperation_percentage.toFixed(1) : 'N/A'}%</td>
+                </tr>`;
+            });
+            html += `</tbody></table></div>
+            
+            <div class="chart-section" style="margin: 30px 0; padding: 20px; background: var(--bg-dark); border-radius: 8px;">
+                <div id="pdCharts1v1"></div>
+            </div>
+
+            <div class="match-results"><h4>Match Results</h4>`;
+            
+            result.matches.forEach((match, index) => {
+                let matchClass = 'match';
+                let matchContent = `<strong>${escapeHtml(match.player_a)} vs ${escapeHtml(match.player_b)}</strong><br>`;
+                
+                if (match.error) {
+                    // Display error for this match
+                    matchClass = 'match' + ' style="border-left: 4px solid var(--danger-color); background: rgba(220, 53, 69, 0.1);"';
+                    matchContent += `<span style="color: var(--danger-color);"><i class="fas fa-exclamation-circle"></i> Error in ${match.error_player === 'A' ? escapeHtml(match.player_a) : escapeHtml(match.player_b)}: ${escapeHtml(match.error)}</span><br>`;
+                    matchContent += `Score (partial): ${match.a_points.toFixed(2)} - ${match.b_points.toFixed(2)}`;
+                } else {
+                    matchContent += `Score: ${match.a_points.toFixed(2)} - ${match.b_points.toFixed(2)} | Winner: ${escapeHtml(match.winner)}`;
+                }
+                
+                html += `<div class="${matchClass}" data-action="showMatchDetails" data-arg="${index}">${matchContent}</div>`;
+            });
+            html += `</div></div>`;
+            
+            document.getElementById('results').innerHTML = html;
+            updateWeights();
+            // Upgraded multi-chart view (bar, scatter, radar, per-mode bar, head-to-head) — the
+            // same renderer the results page and OS-sim use, for a consistent look across modes.
+            renderPDResults('pdCharts1v1', {
+                leaderboard: result.leaderboard,
+                matches: result.matches,
+                modes: (result.tournament_info && result.tournament_info.modes) || result.modes || [],
+                weights: { win_rate: currentWinWeight / 100, cooperation: currentCoopWeight / 100, points: currentPointsWeight / 100 },
+                payoff_matrix: (typeof getPayoffMatrix === 'function') ? getPayoffMatrix() : null,
+            });
+            document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
+        }
+        
+        // ... (match details, modal, auth, gallery functions remain same logic) ...
+        
+        function showMatchDetails(matchIndex) {
+            // Helper function to escape HTML (prevents XSS)
+            function escapeHtml(unsafe) {
+                if (!unsafe) return '';
+                return String(unsafe)
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;")
+                    .replace(/'/g, "&#039;");
+            }
+            
+            const match = currentTournamentResult.matches[matchIndex];
+            let html = `<h2>${escapeHtml(match.player_a)} vs ${escapeHtml(match.player_b)}</h2>`;
+            
+            // Display error if present
+            if (match.error) {
+                html += `
+                    <div style="background: rgba(220, 53, 69, 0.2); border: 2px solid var(--danger-color); padding: 15px; border-radius: 8px; margin: 20px 0;">
+                        <h4 style="margin: 0 0 10px 0; color: var(--danger-color);"><i class="fas fa-exclamation-triangle"></i> Strategy Error</h4>
+                        <p style="margin: 0;"><strong>Strategy:</strong> ${match.error_player === 'A' ? escapeHtml(match.player_a) : escapeHtml(match.player_b)}</p>
+                        <p style="margin: 5px 0 0 0;"><strong>Error:</strong> ${escapeHtml(match.error)}</p>
+                        <p style="margin: 5px 0 0 0; font-style: italic; color: #ccc;">Match terminated early after ${match.rounds || 0} rounds</p>
+                    </div>`;
+            }
+            
+            html += `<div style="margin: 20px 0;">Final: ${match.a_points.toFixed(2)} - ${match.b_points.toFixed(2)} <br> Winner: ${escapeHtml(match.winner)}</div>`;
+            if (match.rounds_detail) {
+                html += `<div class="round-by-round"><h3>Round Details</h3>`;
+                match.rounds_detail.forEach((round, i) => {
+                    html += `<div class="round">R${i+1}: ${escapeHtml(match.player_a)}(${round.a_move}) vs ${escapeHtml(match.player_b)}(${round.b_move}) | Pts: ${round.a_round_points}-${round.b_round_points}</div>`;
+                });
+                html += `</div>`;
+            }
+            document.getElementById('matchModalContent').innerHTML = html;
+            document.getElementById('matchModal').style.display = 'block';
+        }
+        
+        function closeMatchModal() { document.getElementById('matchModal').style.display = 'none'; }
+        window.onclick = function(e) { if(e.target == document.getElementById('matchModal')) closeMatchModal(); }
+        
+        function updateWeights() {
+            const total = parseInt(document.getElementById('winWeight').value) + parseInt(document.getElementById('coopWeight').value) + parseInt(document.getElementById('pointsWeight').value);
+            document.getElementById('winWeightValue').innerText = document.getElementById('winWeight').value;
+            document.getElementById('coopWeightValue').innerText = document.getElementById('coopWeight').value;
+            document.getElementById('pointsWeightValue').innerText = document.getElementById('pointsWeight').value;
+            const status = document.getElementById('weightStatus');
+            status.innerText = `Total: ${total}%` + (total===100 ? ' ✓' : '');
+            status.style.color = total===100 ? 'var(--success-color)' : 'var(--danger-color)';
+            document.getElementById('recalcBtn').disabled = total !== 100;
+        }
+        
+        function resetWeights() {
+            document.getElementById('winWeight').value = 33;
+            document.getElementById('coopWeight').value = 34;
+            document.getElementById('pointsWeight').value = 33;
+            updateWeights();
+        }
+        
+        function recalculateRanking() {
+             // ... logic same as before ...
+             // Re-using displayTournamentResults will handle the UI update
+             const winW = parseInt(document.getElementById('winWeight').value)/100;
+             const coopW = parseInt(document.getElementById('coopWeight').value)/100;
+             const pointW = parseInt(document.getElementById('pointsWeight').value)/100;
+             
+             const newLeaderboard = currentTournamentResult.leaderboard.map(e => {
+                 const totalGames = e.wins + e.draws + e.losses || 1;
+                 const winScore = e.wins / totalGames;
+                 const coopScore = (e.cooperation_percentage || 0) / 100;
+                 const pointScore = (e.points_percentage || 0) / 100;
+                 return { ...e, weighted_score: (winScore*winW + coopScore*coopW + pointScore*pointW) * 100 };
+             });
+             newLeaderboard.sort((a,b) => b.weighted_score - a.weighted_score);
+             currentTournamentResult.leaderboard = newLeaderboard;
+             displayTournamentResults(currentTournamentResult);
+        }
+
+        // Auth & Gallery logic
+        let isUserLoggedIn = false;
+        async function checkAuthStatus() {
+            try { const res = await fetch('/check-auth'); const d = await res.json(); isUserLoggedIn = d.logged_in; updateSaveButtons(); } catch(e){}
+        }
+        
+        function updateSaveButtons() {
+             // Only admins may publish to the shared gallery
+             const btns = document.querySelectorAll('button[data-action="saveStrategyToGallery"]');
+             btns.forEach(b => b.style.display = isAdmin ? 'inline-block' : 'none');
+        }
+        
+        async function saveStrategyToGallery(id) {
+             const name = document.getElementById(`strategyName${id}`).value;
+             const code = document.getElementById(`strategyCode${id}`).value;
+             try {
+                 const res = await fetch('/save-strategy', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name, code}) });
+                 const d = await res.json();
+                 alert(d.success ? d.message : d.error);
+                 if(d.success) loadGallery('1v1', 'galleryContainer', 'galleryStatus');
+             } catch(e) { alert(e.message); }
+        }
+        
+        // ---- Website strategies as a "Select Participants" checklist (per mode) ----
+        // Player submissions + bots come from /api/strategies (cached); organizer practice
+        // strategies from /api/practice-strategies. Their code is NEVER shown or editable here
+        // — you only tick who competes, so a published result can't be tampered with. Only bots
+        // may be replicated (×N). Your own editable "Add Strategy" rows are the local players.
+        const GALLERY = {};   // GALLERY[target] = { players: [...], practice: [...] }
+
+        function galleryEscape(unsafe) {
+            if (!unsafe) return '';
+            return String(unsafe).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+        }
+
+        function renderParticipantChecklist(target, containerId, statusId) {
+            const c = document.getElementById(containerId);
+            if (!c) return;
+            const pool = GALLERY[target] || { players: [], practice: [] };
+            const allPlayers = pool.players || [], practice = pool.practice || [];
+
+            // `p` is the cache pool the row indexes into ('player' for /api/strategies, 'practice'
+            // for /api/practice-strategies). `idx` is the ORIGINAL index in that pool, so selection
+            // + bot replication keep working after we split players vs bots for display.
+            function rowHtml(s, idx, p, isBot) {
+                const tag = p === 'practice' ? 'Practice' : (isBot ? '[BOT]' : 'Player');
+                // Only bots may be replicated within a tournament (count input).
+                const count = isBot
+                    ? `<input type="number" min="1" max="50" value="1" id="cnt_${target}_${p}_${idx}" title="Copies in this tournament">`
+                    : '';
+                return `<div class="part-row">
+                    <input type="checkbox" class="part-check-${target}" data-section="${isBot ? 'bot' : p}"
+                           data-pool="${p}" data-idx="${idx}" data-type="${isBot ? 'bot' : 'tournament'}"
+                           id="chk_${target}_${p}_${idx}">
+                    <label for="chk_${target}_${p}_${idx}" title="${galleryEscape(s.name)}">${galleryEscape(s.name)} <small>(${tag})</small></label>${count}
+                </div>`;
+            }
+            // Each section is its own card column with its OWN Toggle All (scoped via data-section).
+            function section(title, rows, sectionKey) {
+                const body = rows.length ? rows.join('') : `<div class="part-empty">None.</div>`;
+                return `<div class="part-col">
+                    <div class="part-col-head">
+                        <h5>${title} <span style="color:var(--text-secondary); font-weight:normal;">(${rows.length})</span></h5>
+                        <button type="button" class="btn-primary" data-action="toggleAllParticipants" data-arg="${target}" data-arg2="${sectionKey}"
+                                style="padding:3px 9px; font-size:11px; white-space:nowrap;">Toggle All</button>
+                    </div>${body}</div>`;
+            }
+
+            // Split /api/strategies into real players vs bots, preserving original indices.
+            const playerRows = [], botRows = [];
+            allPlayers.forEach((s, idx) => {
+                const isBot = (s.type === 'bot');
+                (isBot ? botRows : playerRows).push(rowHtml(s, idx, 'player', isBot));
+            });
+            const practiceRows = practice.map((s, idx) => rowHtml(s, idx, 'practice', false));
+
+            // Override the card-grid this container was originally styled with; our own grid lays
+            // out the three columns (classes keep the row layout from being broken by global CSS).
+            c.style.display = 'block';
+            c.innerHTML = `<div class="part-grid">
+                ${section('<i class="fas fa-users"></i> Players', playerRows, 'player')}
+                ${section('<i class="fas fa-robot"></i> Bots', botRows, 'bot')}
+                ${section('<i class="fas fa-graduation-cap"></i> Practice', practiceRows, 'practice')}
+            </div>`;
+            const statusEl = document.getElementById(statusId);
+            if (statusEl) statusEl.innerText = `${playerRows.length} player · ${botRows.length} bot · ${practiceRows.length} practice`;
+        }
+
+        // Toggle every checkbox in one section (or all, if no section given) for a mode.
+        function toggleAllParticipants(target, section) {
+            const sel = section ? `.part-check-${target}[data-section="${section}"]` : `.part-check-${target}`;
+            const checks = document.querySelectorAll(sel);
+            const allChecked = checks.length > 0 && Array.from(checks).every(c => c.checked);
+            checks.forEach(c => c.checked = !allChecked);
+        }
+
+        async function fetchGalleryInto(target, containerId, statusId, endpoint, method) {
+            const c = document.getElementById(containerId);
+            if (c) c.innerHTML = '<div style="text-align:center; padding:16px;"><i class="fas fa-spinner fa-spin"></i> Loading participants…</div>';
+            try {
+                const res = await fetch(endpoint, { method: method || 'GET' });
+                const d = await res.json();
+                if (!res.ok && d.strategies === undefined) { throw new Error(d.error || 'Could not reach the website'); }
+                GALLERY[target] = { players: d.strategies || [], practice: d.practice || [] };
+                renderParticipantChecklist(target, containerId, statusId);
+            } catch (e) {
+                console.error(e);
+                if (c) c.innerHTML = `<div style="text-align:center; color: var(--danger-color);">Error loading participants: ${galleryEscape(e.message)}</div>`;
+            }
+        }
+
+        // Cache (offline-ok) on load is a GET; the Refresh button does the one networked POST pull.
+        function loadGallery(target, containerId, statusId)    { return fetchGalleryInto(target, containerId, statusId, '/hub/list', 'GET'); }
+        function refreshGallery(target, containerId, statusId) { return fetchGalleryInto(target, containerId, statusId, '/hub/refresh', 'POST'); }
+
+        // Build roster entries from the checked participants. Players/practice are unique; a bot
+        // may be replicated (count>1) with suffixed names so the engine treats copies as distinct.
+        function collectSelectedParticipants(target) {
+            const pool = GALLERY[target] || { players: [], practice: [] };
+            const out = [];
+            document.querySelectorAll(`.part-check-${target}:checked`).forEach(cb => {
+                const p = cb.dataset.pool, idx = parseInt(cb.dataset.idx);
+                const s = (p === 'practice' ? pool.practice : pool.players)[idx];
+                if (!s || !s.name || !s.code) return;
+                if (p === 'practice') {
+                    out.push({ name: s.name, code: s.code, source: 'practice' });
+                } else if (cb.dataset.type === 'bot') {
+                    const cntEl = document.getElementById(`cnt_${target}_${p}_${idx}`);
+                    const count = Math.max(1, Math.min(50, parseInt(cntEl && cntEl.value) || 1));
+                    for (let k = 0; k < count; k++) {
+                        out.push({ name: k === 0 ? s.name : `${s.name} (${k + 1})`, code: s.code,
+                                   source: 'website', website_id: s.id });
+                    }
+                } else {
+                    out.push({ name: s.name, code: s.code, source: 'website', website_id: s.id });
+                }
+            });
+            return out;
+        }
+
+        // Collect the user's own editable rows for a mode (all source 'local').
+        function collectLocalRows(prefix, count) {
+            const out = [];
+            for (let i = 1; i <= count; i++) {
+                const name = document.getElementById(`${prefix}Name${i}`)?.value;
+                const code = document.getElementById(`${prefix}Code${i}`)?.value;
+                if (name && code) out.push({ name, code, source: 'local' });
+            }
+            return out;
+        }
+
+
+        window.onload = function() {
+            loadDefaultStrategies();
+            loadGallery('1v1', 'galleryContainer', 'galleryStatus');
+            checkAuthStatus();
+            // Init N-Player
+            addNpStrategy();
+            loadNpExample(1, 'cooperate');
+            addNpStrategy();
+            loadNpExample(2, 'defect');
+            toggleNPlayerPayoffFieldsPractice();
+            toggleNPlayerAlphaFieldPractice();
+            loadGallery('nplayer', 'npGalleryContainer', 'npGalleryStatus');
+            // Init OS Simulation practice
+            addOsStrategy();
+            loadOsExample(1, 'titfortat');
+            addOsStrategy();
+            loadOsExample(2, 'defect');
+            loadGallery('os', 'osGalleryContainer', 'osGalleryStatus');
+        };
+
+        /* N-Player Practice Logic */
+        const MAX_NP_STRATEGIES = effectiveMaxNplayer;  // 4 for everyone (server enforces)
+        let npStrategyCount = 0;
+
+        function toggleNPlayerPayoffFieldsPractice() {
+            const type = document.getElementById('np_payoff_type').value;
+            document.getElementById('np_pg_fields').style.display = type === 'public_goods' ? 'block' : 'none';
+            document.getElementById('np_pm_fields').style.display = type === 'pairwise_matrix' ? 'block' : 'none';
+            document.getElementById('np_kc_fields').style.display = type === 'kcoop_tensor' ? 'block' : 'none';
+
+            if (type === 'public_goods') {
+                toggleNPlayerAlphaFieldPractice();
+            }
+        }
+
+        function toggleNPlayerAlphaFieldPractice() {
+            document.getElementById('np_pg_alpha_field').style.display = 
+                document.getElementById('np_pg_nonlinear').value === 'power' ? 'block' : 'none';
+        }
+
+        function addNpStrategy() {
+            // No cap — runs on the user's own machine (parity with 1v1); a pre-run estimate warns.
+            npStrategyCount++;
+            document.getElementById('npStrategyCountDisplay').textContent = npStrategyCount;
+            
+            const id = npStrategyCount;
+            const div = document.createElement('div');
+            div.className = 'strategy';
+            div.id = `npStrategy${id}`;
+            div.innerHTML = `
+                <h3>NP Strategy ${id}</h3>
+                <label>Function Name:
+                    <input type="text" id="npStrategyName${id}" value="np_strat_${id}" data-action="loadNpExample" data-arg="${id}" data-arg2="temp" data-on="change">
+                </label>
+                <br><br>
+                <textarea id="npStrategyCode${id}"></textarea>
+                <div style="margin-top: 10px;">
+                     <button data-action="loadNpExample" data-arg="${id}" data-arg2="cooperate" style="background: var(--primary-color); color: white; padding: 5px 10px; font-size: 12px;">Always Cooperate</button>
+                     <button data-action="loadNpExample" data-arg="${id}" data-arg2="defect" style="background: var(--primary-color); color: white; padding: 5px 10px; font-size: 12px;">Always Defect</button>
+                     <button data-action="loadNpExample" data-arg="${id}" data-arg2="random" style="background: var(--primary-color); color: white; padding: 5px 10px; font-size: 12px;">Random</button>
+                </div>
+            `;
+            document.getElementById('npStrategiesContainer').appendChild(div);
+        }
+
+        function removeLastNpStrategy() {
+            if (npStrategyCount > 0) {
+                document.getElementById(`npStrategy${npStrategyCount}`).remove();
+                npStrategyCount--;
+                 document.getElementById('npStrategyCountDisplay').textContent = npStrategyCount;
+            }
+        }
+
+        function loadNpExample(id, type) {
+            const nameEl = document.getElementById(`npStrategyName${id}`);
+            if (type === 'temp') return; 
+            const name = nameEl.value;
+            let code = "";
+            if (type === 'cooperate') code = `def ${name}(last_moves, my_history, opponents_histories, meta):\n    return 'C'`;
+            if (type === 'defect') code = `def ${name}(last_moves, my_history, opponents_histories, meta):\n    return 'D'`;
+            if (type === 'random') code = `def ${name}(last_moves, my_history, opponents_histories, meta):\n    return 'C' if randint(0, 1) else 'D'`;
+            document.getElementById(`npStrategyCode${id}`).value = code;
+        }
+
+        async function startNPlayerTournament() {
+            const rounds = Math.min(parseInt(document.getElementById('np_rounds').value) || 100, 1000);
+            const groupSize = document.getElementById('np_group_size').value ? parseInt(document.getElementById('np_group_size').value) : null;
+            const seed = document.getElementById('np_seed').value ? parseInt(document.getElementById('np_seed').value) : null;
+            
+            const modes = [];
+            if(document.getElementById('np_mode_standard').checked) modes.push('standard');
+            if(document.getElementById('np_mode_discounted').checked) modes.push('discounted');
+            if(document.getElementById('np_mode_stochastic').checked) modes.push('stochastic');
+            if(document.getElementById('np_mode_random').checked) modes.push('random');
+            if (modes.length === 0) modes.push('standard');
+
+            const discountFactor = parseFloat(document.getElementById('np_discount_factor').value);
+            const stochasticProb = parseFloat(document.getElementById('np_stochastic_prob').value);
+
+            if (!(discountFactor > 0 && discountFactor <= 1)) {
+                alert('[ERROR] Discount factor must be in (0, 1]');
+                return;
+            }
+            if (!(stochasticProb > 0 && stochasticProb <= 1)) {
+                alert('[ERROR] Stochastic prob must be in (0, 1]');
+                return;
+            }
+            
+            const payoffType = document.getElementById('np_payoff_type').value;
+            let payoffModel = { type: payoffType };
+            
+            if (payoffType === 'public_goods') {
+                payoffModel.b = parseFloat(document.getElementById('np_pg_b').value);
+                payoffModel.c = parseFloat(document.getElementById('np_pg_c').value);
+
+                const nonlinear = document.getElementById('np_pg_nonlinear').value;
+                payoffModel.nonlinear = nonlinear;
+                if (nonlinear === 'power') {
+                    payoffModel.alpha = parseFloat(document.getElementById('np_pg_alpha').value);
+                }
+            } else if (payoffType === 'pairwise_matrix') {
+                payoffModel.aggregate = document.getElementById('np_pm_agg').value;
+                const pmVal = id => parseInt(document.getElementById(id).value);
+                payoffModel.payoff_matrix = {
+                    'CC': [pmVal('np_pm_cc_a'), pmVal('np_pm_cc_b')],
+                    'CD': [pmVal('np_pm_cd_a'), pmVal('np_pm_cd_b')],
+                    'DC': [pmVal('np_pm_dc_a'), pmVal('np_pm_dc_b')],
+                    'DD': [pmVal('np_pm_dd_a'), pmVal('np_pm_dd_b')]
+                };
+            } else if (payoffType === 'kcoop_tensor') {
+                try {
+                    payoffModel.u_C = JSON.parse(document.getElementById('np_kc_uc').value);
+                    payoffModel.u_D = JSON.parse(document.getElementById('np_kc_ud').value);
+                } catch(e) { alert("Invalid JSON for Tensor"); return; }
+            }
+
+            const roster = collectLocalRows('npStrategy', npStrategyCount).concat(collectSelectedParticipants('nplayer'));
+            const strategies = roster.map(r => ({ name: r.name, code: r.code }));
+            if (strategies.length < 2) { alert("Select at least 2 participants"); return; }
+
+            // No cap — but warn with a rough estimate before a large run (parity with 1v1).
+            if (!confirmWorkload('nplayer', strategies.length, rounds, modes.length)) return;
+
+            const payload = {
+                strategies, rounds, seed, group_size: groupSize, 
+                payoff_model: payoffModel, modes, 
+                discount_factor: discountFactor, stochastic_prob: stochasticProb
+            };
+
+            document.getElementById('nplayerResults').innerHTML = '<div style="text-align: center; padding: 20px;"><i class="fas fa-spinner fa-spin"></i> Running N-Player tournament...</div>';
+
+            try {
+                const nplayerTournamentUrl = "{{ url_for('nplayer_tournament') }}";
+                const response = await fetch(nplayerTournamentUrl, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await readJsonOrRedirect(response);
+
+                if (!response.ok || result?.error) {
+                    const msg = result?.error ? String(result.error) : `Request failed (${response.status})`;
+                    document.getElementById('nplayerResults').innerHTML = `<div class="results" style="color: var(--danger-color);">${msg}</div>`;
+                    return;
+                }
+
+                displayNPlayerTournamentResults(result);
+                showSubmitPanel('nplayer', result, roster);
+            } catch(e) {
+                console.error(e);
+                document.getElementById('nplayerResults').innerHTML = `<div class="results" style="color: var(--danger-color);">Error running tournament</div>`;
+            }
+        }
+
+        function displayNPlayerTournamentResults(result) {
+            const info = result.tournament_info || {};
+            const modes = Array.isArray(info.modes) ? info.modes : [];
+            const rounds = info.rounds ?? '';
+            const nGroups = info.n_groups ?? '';
+            const groupSize = info.group_size ?? '';
+
+            // Default ranking weights (mirrors 1v1); kept on the result so re-renders persist them.
+            const npW = (info.weights && info.weights.win != null)
+                ? info.weights : { win: 0.33, coop: 0.34, points: 0.33 };
+            const npWin = Math.round(npW.win * 100), npCoop = Math.round(npW.coop * 100), npPoints = Math.round(npW.points * 100);
+
+            // Keep the latest result for slider recalculation, then compute a weighted Score per
+            // entry (same formula as 1v1: win-rate / cooperation / points-normalized) and rank by it.
+            currentNpResult = result;
+            const maxNpPoints = Math.max(1, ...((result.leaderboard || []).map(e => Number(e.total_points) || 0)));
+            (result.leaderboard || []).forEach(e => {
+                const games = (e.wins || 0) + (e.draws || 0) + (e.losses || 0) || 1;
+                const winScore = (e.wins || 0) / games;
+                const coopScore = (e.cooperation_percentage || 0) / 100;
+                const pointScore = (Number(e.total_points) || 0) / maxNpPoints;
+                e.weighted_score = (winScore * npW.win + coopScore * npW.coop + pointScore * npW.points) * 100;
+            });
+            (result.leaderboard || []).sort((a, b) => (b.weighted_score || 0) - (a.weighted_score || 0));
+
+            let html = `<div class="results" style="border-left: 4px solid var(--primary-color); background: var(--bg-card);">
+                <h3 style="color: var(--primary-color) !important;">N-Player Results</h3>
+
+                <div style="background: rgba(0,0,0,0.2); padding: 10px; margin-bottom: 20px;">
+                    <strong>Info:</strong> ${rounds} rounds,
+                    ${nGroups} groups,
+                    Group size: ${groupSize || 'all'},
+                    Modes: ${modes.join(', ')}
+                </div>
+
+                <div style="background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                    <h4 style="margin: 0 0 10px 0;">Ranking Weights</h4>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px;">
+                        <div><label>Win Rate: <span id="npWinWeightValue">${npWin}</span>%</label><input type="range" id="npWinWeight" min="0" max="100" value="${npWin}" data-action="updateNpWeights" data-on="input" style="width: 100%;"></div>
+                        <div><label>Cooperation: <span id="npCoopWeightValue">${npCoop}</span>%</label><input type="range" id="npCoopWeight" min="0" max="100" value="${npCoop}" data-action="updateNpWeights" data-on="input" style="width: 100%;"></div>
+                        <div><label>Points: <span id="npPointsWeightValue">${npPoints}</span>%</label><input type="range" id="npPointsWeight" min="0" max="100" value="${npPoints}" data-action="updateNpWeights" data-on="input" style="width: 100%;"></div>
+                    </div>
+                    <div style="text-align: center; margin-top: 10px;">
+                        <span id="npWeightStatus" style="font-weight: bold; color: var(--success-color);">Total: 100% ✓</span>
+                        <button data-action="recalculateNpRanking" id="npRecalcBtn" style="margin-left: 15px; background: var(--primary-color); color: white;"><i class="fas fa-chart-bar"></i> Recalculate</button>
+                        <button data-action="resetNpWeights" style="margin-left: 10px; background: var(--warning-color); color: white;"><i class="fas fa-undo"></i> Reset</button>
+                    </div>
+                </div>
+
+                <div class="leaderboard">
+                    <h4>Leaderboard</h4>
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr style="background: rgba(255,255,255,0.1);">
+                                <th style="padding: 8px; border: 1px solid var(--border-color);">Rank</th>
+                                <th style="padding: 8px; border: 1px solid var(--border-color);">Name</th>
+                                <th style="padding: 8px; border: 1px solid var(--border-color);">Score</th>
+                                <th style="padding: 8px; border: 1px solid var(--border-color);">Total Points</th>
+                                <th style="padding: 8px; border: 1px solid var(--border-color);">Coop %</th>
+                                <th style="padding: 8px; border: 1px solid var(--border-color);">W/D/L</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+
+            (result.leaderboard || []).forEach((p, idx) => {
+                html += `<tr>
+                    <td style="padding: 8px; border: 1px solid var(--border-color); text-align: center;">${idx + 1}</td>
+                    <td style="padding: 8px; border: 1px solid var(--border-color);">${p.name}</td>
+                    <td style="padding: 8px; border: 1px solid var(--border-color); text-align: center;">${Number(p.weighted_score ?? 0).toFixed(2)}</td>
+                    <td style="padding: 8px; border: 1px solid var(--border-color); text-align: center;">${Number(p.total_points ?? 0).toFixed(2)}</td>
+                    <td style="padding: 8px; border: 1px solid var(--border-color); text-align: center;">${Number(p.cooperation_percentage ?? 0).toFixed(1)}%</td>
+                    <td style="padding: 8px; border: 1px solid var(--border-color); text-align: center;">${p.wins ?? 0}/${p.draws ?? 0}/${p.losses ?? 0}</td>
+                </tr>`;
+            });
+            
+            html += `</tbody></table></div>`;
+
+            // Upgraded multi-chart view (parity with 1v1 / OS sim). N-player has no pairwise
+            // head-to-head, so that matrix is omitted automatically by the renderer.
+            html += `<div class="chart-section" style="margin: 30px 0; padding: 20px; background: var(--bg-dark); border-radius: 8px;"><div id="pdChartsNplayer"></div></div>`;
+
+            const matches = Array.isArray(result.matches) ? result.matches : [];
+            if (matches.length > 0) {
+                html += `<div class="match-results" style="margin-top: 20px;"><h4>Groups</h4>`;
+                matches.forEach((match) => {
+                    const players = Array.isArray(match.players) ? match.players : [];
+                    const groupIndex = match.group_index ?? '';
+                    html += `<div class="match">Group ${Number(groupIndex) + 1 || groupIndex}: ${players.join(', ')}</div>`;
+                });
+                html += `</div>`;
+            }
+
+            html += `</div>`;
+
+            document.getElementById('nplayerResults').innerHTML = html;
+            updateNpWeights();   // sync the slider labels + Recalculate button state
+            renderPDResults('pdChartsNplayer', {
+                leaderboard: result.leaderboard,
+                matches: [],  // N-player matches are group-shaped, not pairwise
+                modes: modes,
+                weights: { win_rate: npW.win, cooperation: npW.coop, points: npW.points },
+            });
+            document.getElementById('nplayerResults').scrollIntoView({behavior: 'smooth'});
+        }
+
+        // N-Player ranking-weight controls (mirror the 1v1 sliders, with np-prefixed ids).
+        let currentNpResult = null;
+        function updateNpWeights() {
+            const w = document.getElementById('npWinWeight'); if (!w) return;
+            const total = parseInt(document.getElementById('npWinWeight').value)
+                        + parseInt(document.getElementById('npCoopWeight').value)
+                        + parseInt(document.getElementById('npPointsWeight').value);
+            document.getElementById('npWinWeightValue').innerText = document.getElementById('npWinWeight').value;
+            document.getElementById('npCoopWeightValue').innerText = document.getElementById('npCoopWeight').value;
+            document.getElementById('npPointsWeightValue').innerText = document.getElementById('npPointsWeight').value;
+            const status = document.getElementById('npWeightStatus');
+            status.innerText = `Total: ${total}%` + (total === 100 ? ' ✓' : '');
+            status.style.color = total === 100 ? 'var(--success-color)' : 'var(--danger-color)';
+            document.getElementById('npRecalcBtn').disabled = total !== 100;
+        }
+        function resetNpWeights() {
+            document.getElementById('npWinWeight').value = 33;
+            document.getElementById('npCoopWeight').value = 34;
+            document.getElementById('npPointsWeight').value = 33;
+            updateNpWeights();
+        }
+        function recalculateNpRanking() {
+            if (!currentNpResult) return;
+            const win = parseInt(document.getElementById('npWinWeight').value) / 100;
+            const coop = parseInt(document.getElementById('npCoopWeight').value) / 100;
+            const points = parseInt(document.getElementById('npPointsWeight').value) / 100;
+            currentNpResult.tournament_info = currentNpResult.tournament_info || {};
+            currentNpResult.tournament_info.weights = { win, coop, points };
+            displayNPlayerTournamentResults(currentNpResult);   // recomputes Score + re-sorts + re-renders
+        }
+
+        /* ===== OS Simulation Practice Logic ===== */
+        let osStrategyCount = 0;
+        const MAX_OS_STRATEGIES = effectiveMaxNplayer;  // 4 for everyone (server enforces)
+
+        function addOsStrategy() {
+            // No cap — runs on the user's own machine (parity with 1v1); a pre-run estimate warns.
+            osStrategyCount++;
+            document.getElementById('osStrategyCountDisplay').textContent = osStrategyCount;
+            const id = osStrategyCount;
+            const div = document.createElement('div');
+            div.className = 'strategy';
+            div.id = `osStrategy${id}`;
+            div.innerHTML = `
+                <h3>OS Strategy ${id}</h3>
+                <label>Function Name:
+                    <input type="text" id="osStrategyName${id}" value="os_strat_${id}">
+                </label>
+                <br><br>
+                <textarea id="osStrategyCode${id}"></textarea>
+                <div style="margin-top: 10px;">
+                    <button data-action="loadOsExample" data-arg="${id}" data-arg2="cooperate" style="background: var(--primary-color); color: white; padding: 5px 10px; font-size: 12px;">Always Cooperate</button>
+                    <button data-action="loadOsExample" data-arg="${id}" data-arg2="defect" style="background: var(--primary-color); color: white; padding: 5px 10px; font-size: 12px;">Always Defect</button>
+                    <button data-action="loadOsExample" data-arg="${id}" data-arg2="titfortat" style="background: var(--primary-color); color: white; padding: 5px 10px; font-size: 12px;">Tit-for-Tat</button>
+                </div>
+            `;
+            document.getElementById('osStrategiesContainer').appendChild(div);
+        }
+
+
+        function removeLastOsStrategy() {
+            if (osStrategyCount > 0) {
+                const el = document.getElementById(`osStrategy${osStrategyCount}`);
+                if (el) el.remove();
+                osStrategyCount--;
+                document.getElementById('osStrategyCountDisplay').textContent = osStrategyCount;
+            }
+        }
+
+        function loadOsExample(id, type) {
+            const name = document.getElementById(`osStrategyName${id}`).value;
+            let code = '';
+            // Unified 4-arg signature works in the OS simulation too.
+            if (type === 'cooperate') code = `def ${name}(last_moves, my_history, opponents_histories, meta):\n    return 'C'`;
+            if (type === 'defect') code = `def ${name}(last_moves, my_history, opponents_histories, meta):\n    return 'D'`;
+            if (type === 'titfortat') code = `def ${name}(last_moves, my_history, opponents_histories, meta):\n    return last_moves[0] if last_moves else 'C'`;
+            document.getElementById(`osStrategyCode${id}`).value = code;
+        }
+
+        async function startOSSimulation() {
+            const numCores = parseInt(document.getElementById('os_num_cores').value);
+            const coreAssignmentMode = document.getElementById('os_assignment').value;
+            const scheduler = document.getElementById('os_scheduler').value;
+            const seedInput = document.getElementById('os_seed').value;
+            const seed = seedInput ? parseInt(seedInput) : null;
+
+            if (!(numCores >= 2 && numCores <= 8)) { alert('Number of cores must be between 2 and 8'); return; }
+
+            const roster = collectLocalRows('osStrategy', osStrategyCount).concat(collectSelectedParticipants('os'));
+            const strategies = roster.map(r => ({ name: r.name, code: r.code }));
+            if (strategies.length < 2) { alert('Select at least 2 participants!'); return; }
+
+            // No cap — warn with the combination count + a rough time estimate (parity with 1v1).
+            if (!confirmWorkload('os', strategies.length, 0, 0, { numCores, assignment: coreAssignmentMode })) return;
+            // Heterogeneous places one distinct strategy per core, so it needs at least num_cores strategies.
+            if (coreAssignmentMode === 'heterogeneous' && strategies.length < numCores) {
+                alert(`Heterogeneous assignment needs at least ${numCores} strategies (one per core). Add strategies or lower cores.`); return;
+            }
+
+            const payload = { strategies, num_cores: numCores, core_assignment_mode: coreAssignmentMode, scheduler, seed };
+            document.getElementById('osResults').innerHTML = '<div style="text-align: center; padding: 20px;"><i class="fas fa-spinner fa-spin"></i> Running OS simulation...</div>';
+
+            try {
+                const response = await fetch('/os-simulation', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                });
+                const result = await readJsonOrRedirect(response);
+                if (!response.ok || result?.error) {
+                    const msg = result?.error ? String(result.error) : `Request failed (${response.status})`;
+                    document.getElementById('osResults').innerHTML = `<div class="results" style="color: var(--danger-color);">${msg}</div>`;
+                    return;
+                }
+                renderOSSimulation('osResults', result);
+                showSubmitPanel('os', result, roster);
+            } catch (e) {
+                console.error(e);
+                document.getElementById('osResults').innerHTML = '<div class="results" style="color: var(--danger-color);">Error running OS simulation</div>';
+            }
+        }
+
+    </script>
+</body>
+</html>

@@ -1,0 +1,556 @@
+:root {
+    --bg-dark: #0f172a;
+    --bg-card: #1e293b;
+    --bg-hover: #334155;
+    --text-primary: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --border-color: #334155;
+    
+    /* Desaturated Colors */
+    --primary-color: #3b82f6; /* Blue */
+    --primary-hover: #2563eb;
+    --primary-muted: #60a5fa;
+    
+    --success-color: #10b981; /* Green */
+    --success-hover: #059669;
+    --success-muted: #34d399;
+    
+    --danger-color: #ef4444; /* Red */
+    --danger-hover: #dc2626;
+    --danger-muted: #f87171;
+    
+    --warning-color: #f59e0b; /* Amber */
+    --warning-hover: #d97706;
+    
+    --info-color: #06b6d4; /* Cyan */
+    
+    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.5), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
+    --font-mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+body {
+    background-color: var(--bg-dark);
+    color: var(--text-primary);
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+/* Common Components */
+.card, .strategy, .user-info, .admin-section, .tournament-card, .results-section, .info-box, .login-container {
+    background-color: var(--bg-card) !important;
+    border: 1px solid var(--border-color) !important;
+    box-shadow: var(--shadow-md);
+    color: var(--text-primary);
+    border-radius: 10px;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    color: var(--text-primary) !important;
+}
+
+/* Shared "How it works" explainer (_game_info.html): self-contained spacing so it
+   renders identically on the practice and results pages regardless of page context.
+   The padding/margin live here (not on a page's .strategy rule) so the card content
+   never sits flush against its border on pages that don't style .strategy. */
+.game-info { line-height: 1.55; padding: 16px 20px; margin: 15px 0; }
+.game-info p { margin: 0 0 10px 0; }
+.game-info ul { margin: 0 0 12px 18px; }
+.game-info li { margin-bottom: 5px; }
+.game-info h3 { margin: 0 0 12px 0; }
+
+a {
+    color: var(--primary-muted);
+    text-decoration: none;
+}
+
+a:hover {
+    color: var(--primary-color);
+    text-decoration: underline;
+}
+
+/* Form Elements */
+input, select, textarea {
+    background-color: var(--bg-dark);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 10px 14px;
+    border-radius: 6px;
+    width: 100%;
+    box-sizing: border-box;
+    transition: border-color 0.2s;
+}
+
+input:focus, select:focus, textarea:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+/* Ensure numeric spinners are visible in dark mode */
+input[type=number]::-webkit-inner-spin-button, 
+input[type=number]::-webkit-outer-spin-button { 
+    filter: invert(1);
+}
+
+label {
+    display: block;
+    margin-bottom: 8px;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+/* Buttons */
+button, .btn {
+    font-weight: 600;
+    transition: all 0.2s ease;
+    border-radius: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-size: 0.85rem !important;
+    padding: 10px 20px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+button:hover, .btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+button:disabled, .btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none !important;
+}
+
+/* Button Variants */
+.btn-primary {
+    background-color: var(--bg-hover);
+    color: var(--primary-muted);
+    border-color: var(--primary-color);
+}
+
+.btn-primary:hover {
+    background-color: var(--primary-color);
+    color: white;
+}
+
+.btn-success {
+    background-color: var(--bg-hover);
+    color: var(--success-muted);
+    border-color: var(--success-color);
+}
+
+.btn-success:hover {
+    background-color: var(--success-color);
+    color: white;
+}
+
+.btn-danger {
+    background-color: var(--bg-hover);
+    color: var(--danger-muted);
+    border-color: var(--danger-color);
+}
+
+.btn-danger:hover {
+    background-color: var(--danger-color);
+    color: white;
+}
+
+.btn-warning {
+    background-color: var(--bg-hover);
+    color: var(--warning-color);
+    border-color: var(--warning-color);
+}
+
+.btn-warning:hover {
+    background-color: var(--warning-hover);
+    color: white;
+}
+
+/* Login Specific */
+.login-container {
+    max-width: 400px;
+    margin: 60px auto;
+    padding: 40px;
+}
+
+.login-btn {
+    width: 100%;
+    margin-top: 20px;
+    padding: 12px;
+    font-size: 1rem !important;
+    background-color: var(--primary-color);
+    color: white;
+}
+
+.login-btn:hover {
+    background-color: var(--primary-hover);
+}
+
+.resend-btn {
+    background-color: transparent;
+    border: 1px solid var(--warning-color);
+    color: var(--warning-color);
+    padding: 6px 12px;
+}
+
+.resend-btn:hover:not(:disabled) {
+    background-color: var(--warning-color);
+    color: white;
+}
+
+/* Alerts and Messages */
+.error-message, .success-message, .spam-warning {
+    padding: 12px;
+    border-radius: 6px;
+    margin-bottom: 20px;
+    text-align: center;
+    font-size: 0.9rem;
+    border: 1px solid transparent;
+}
+
+.error-message {
+    background-color: rgba(239, 68, 68, 0.1);
+    color: var(--danger-muted);
+    border-color: rgba(239, 68, 68, 0.2);
+}
+
+.success-message {
+    background-color: rgba(16, 185, 129, 0.1);
+    color: var(--success-muted);
+    border-color: rgba(16, 185, 129, 0.2);
+}
+
+.spam-warning {
+    background-color: rgba(245, 158, 11, 0.1);
+    color: var(--warning-color);
+    border-color: rgba(245, 158, 11, 0.2);
+    margin-top: 20px;
+}
+
+/* Tables */
+table {
+    border-color: var(--border-color);
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th {
+    background-color: var(--bg-hover) !important;
+    color: var(--text-primary) !important;
+    border-color: var(--border-color) !important;
+    padding: 12px;
+    text-align: left;
+}
+
+td {
+    border-color: var(--border-color) !important;
+    color: var(--text-secondary);
+    padding: 12px;
+}
+
+tr:hover td {
+    background-color: rgba(255, 255, 255, 0.03);
+    color: var(--text-primary);
+}
+
+/* Navbar specific override */
+nav {
+    background: var(--bg-card) !important;
+    border-bottom: 1px solid var(--border-color);
+}
+
+nav a {
+    color: var(--text-secondary) !important;
+    background: transparent !important;
+}
+
+nav a:hover {
+    color: var(--text-primary) !important;
+    background: var(--bg-hover) !important;
+    transform: translateY(0) !important;
+}
+
+/* Code editors / blocks keep the dark background */
+pre, .code-cell, textarea {
+    font-family: var(--font-mono) !important;
+    background-color: #0d1117 !important;
+    color: #e6edf3 !important;
+}
+
+/* Inline code reads as a soft pill, not a harsh black box */
+code {
+    font-family: var(--font-mono) !important;
+    background-color: rgba(148, 163, 184, 0.15);
+    color: var(--primary-muted);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.9em;
+}
+
+/* But inline code inside a code editor/block inherits the block look */
+pre code, textarea code, .code-cell code {
+    background-color: transparent;
+    color: inherit;
+    padding: 0;
+}
+
+/* Match & Strategy items */
+.match, .strategy-box {
+    background-color: var(--bg-dark) !important;
+    border: 1px solid var(--border-color) !important;
+    color: var(--text-secondary);
+}
+
+.match:hover {
+    background-color: var(--bg-hover) !important;
+    border-color: var(--primary-color) !important;
+}
+
+/* Modal */
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.8);
+    backdrop-filter: blur(4px);
+    overflow: auto;
+}
+
+.modal-content {
+    background-color: var(--bg-card) !important;
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    margin: 5% auto;
+    padding: 20px;
+    border-radius: 10px;
+    width: 90%;
+    max-width: 800px;
+    max-height: 80vh;
+    overflow-y: auto;
+}
+
+.close {
+    color: var(--text-secondary) !important;
+}
+
+.close:hover {
+    color: var(--danger-color) !important;
+}
+
+.text-muted, small, .meta-label {
+    color: var(--text-secondary) !important;
+}
+
+/* Responsive table wrapper */
+.table-responsive {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    width: 100%;
+    margin: 10px 0;
+}
+
+/* Layout - Desktop defaults */
+.main-content {
+    margin: 40px;
+    padding: 0;
+}
+
+.results-section {
+    padding: 20px;
+}
+
+/* Mobile Responsive Styles */
+@media (max-width: 768px) {
+    /* Reduce padding for main content areas */
+    .main-content {
+        margin: 20px 10px !important;
+        padding: 10px !important;
+    }
+    
+    .login-container {
+        margin: 30px 15px;
+        padding: 20px;
+    }
+    
+    /* Modal adjustments for small screens */
+    .modal-content {
+        margin: 10px;
+        padding: 15px;
+        width: 95%;
+        max-height: 90vh;
+    }
+    
+    /* Ensure headings wrap */
+    h1, h2, h3 {
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+    }
+    
+    /* Button wrapping */
+    button, .btn {
+        word-wrap: break-word;
+        white-space: normal;
+    }
+    
+    /* Allow navbar to wrap (classes will be added in Phase 3) */
+    nav > div {
+        flex-direction: column;
+        gap: 10px;
+    }
+    
+    nav > div > div {
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+    
+    /* Strategy cards stack on mobile */
+    .player {
+        display: block !important;
+        width: 100% !important;
+        margin: 10px 0 !important;
+    }
+    
+    /* Reduce table padding on mobile */
+    th, td {
+        padding: 8px 4px !important;
+        font-size: 14px;
+    }
+    
+    /* Admin section spacing */
+    .admin-section {
+        padding: 15px !important;
+        margin-bottom: 15px !important;
+    }
+}
+
+/* Tournament Traceability Styles */
+.mono-token {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    background-color: var(--bg-dark);
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    color: var(--info-color);
+    word-break: break-all;
+}
+
+.copy-button {
+    background: none;
+    border: none;
+    color: var(--primary-muted);
+    cursor: pointer;
+    padding: 4px 8px;
+    font-size: 0.9em;
+    transition: color 0.2s;
+}
+
+.copy-button:hover {
+    color: var(--primary-color);
+    transform: none;
+}
+
+.copy-button i {
+    margin-right: 4px;
+}
+
+.tournament-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+    margin: 20px 0;
+}
+
+.meta-item {
+    display: flex;
+    flex-direction: column;
+}
+
+.meta-label {
+    font-size: 0.85em;
+    color: var(--text-secondary);
+    margin-bottom: 5px;
+}
+
+.meta-value {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.collapsible-section {
+    margin: 15px 0;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.collapsible-section summary {
+    background-color: var(--bg-hover);
+    padding: 10px 15px;
+    cursor: pointer;
+    font-weight: 600;
+    user-select: none;
+    transition: background-color 0.2s;
+}
+
+.collapsible-section summary:hover {
+    background-color: var(--primary-color);
+}
+
+.collapsible-section .content {
+    padding: 15px;
+    background-color: var(--bg-card);
+}
+
+.export-controls {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 10px;
+    align-items: center;
+    padding: 15px;
+    background: var(--bg-hover);
+    border-radius: 8px;
+    margin: 15px 0;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.export-controls .btn {
+    white-space: nowrap;
+}
+
+.btn-export {
+    background-color: var(--bg-hover);
+    color: var(--info-color);
+    border-color: var(--info-color);
+}
+
+.btn-export:hover {
+    background-color: var(--info-color);
+    color: white;
+}
+
+/* Utility classes */
+.ml-auto {
+    margin-left: auto;
+}
+
+.tournament-card {
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+.tournament-card:hover {
+    border-color: var(--primary-color);
+    transform: translateY(-2px);
+    transition: all 0.2s;
+}
