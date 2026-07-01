@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for, flash, g
+from flask import Flask, render_template, request, jsonify, session, g
 import json
 import random
 import ast
@@ -8,7 +8,6 @@ import math
 import logging
 import os
 import sys
-import threading
 import time
 import uuid
 from random import randint
@@ -40,7 +39,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from payoff_models import PairwiseMatrixPayoff, PublicGoodsPayoff, KCooperatorTensorPayoff
 from n_player_simulation import group_tournament, call_strategy
-from tournament_package import sha256_text, canonical_json, build_tournament_package
+from tournament_package import sha256_text, canonical_json
 
 # --- SECURITY & LIMITS ---
 class InstructionLimitExceeded(Exception):
@@ -123,30 +122,6 @@ if hasattr(sys, 'set_int_max_str_digits'):
     except (ValueError, OverflowError):
         pass
 
-# (Legacy) admin practice ceiling. Kept for compatibility; the local app no longer caps the
-# number of practice strategies (it runs on the user's own machine).
-try:
-    MAX_ADMIN_STRATEGIES = int(os.environ.get('MAX_ADMIN_STRATEGIES', '50'))
-except (TypeError, ValueError):
-    MAX_ADMIN_STRATEGIES = 50
-
-# (Legacy) practice strategy ceiling. No longer enforced — every mode runs uncapped on the
-# user's machine; kept only so old references resolve.
-try:
-    MAX_PRACTICE_STRATEGIES = int(os.environ.get('MAX_PRACTICE_STRATEGIES', '4'))
-except (TypeError, ValueError):
-    MAX_PRACTICE_STRATEGIES = 4
-if MAX_PRACTICE_STRATEGIES < 2:
-    MAX_PRACTICE_STRATEGIES = 4
-
-# Max cores an N-player core simulation may model. A 1v1 tournament is inherently a
-# 2-core system; an N-player tournament uses N cores, but is capped so a single run
-# can't allocate an unbounded number of simulated cores on the user's machine.
-try:
-    MAX_NPLAYER_CORES = int(os.environ.get('MAX_NPLAYER_CORES', '64'))
-except (TypeError, ValueError):
-    MAX_NPLAYER_CORES = 64
-
 # Max strategy->core combinations evaluated by the 'heterogeneous' assignment. The space is
 # C(strategies, num_cores) (each strategy used at most once). Every combination is enumerated and
 # displayed; if the count would exceed this ceiling the run is rejected (400) so the user reduces
@@ -182,7 +157,9 @@ VALID_ASSIGNMENT_MODES = ('homogeneous', 'heterogeneous')
 # --------------------------
 
 # Configure logging before Flask app initialization
-FLASK_ENV = os.environ.get('FLASK_ENV', 'production')
+# This repo is always the LOCAL student app (never a public server — that's ipd-hub), so it
+# defaults to development: HTTP is fine and no FLASK_SECRET_KEY is required to run.
+FLASK_ENV = os.environ.get('FLASK_ENV', 'development')
 IS_PRODUCTION = FLASK_ENV == 'production'
 
 # Local single-user mode (see .env.example / README "Deployment model"). When on,
@@ -190,7 +167,10 @@ IS_PRODUCTION = FLASK_ENV == 'production'
 # login is required to practice. The auth decorators (auth_utils.py) short-circuit;
 # the before_request hook below injects the matching synthetic session user so the
 # 55 routes that read session['user'] keep working unchanged.
-LOCAL_MODE = os.environ.get('LOCAL_MODE', '').strip().lower() in ('1', 'true', 'yes', 'on')
+# This repo is always the local student app, so LOCAL_MODE defaults ON (auto-logs in the single
+# local owner). It's local-only — the website (ipd-hub) is the real auth boundary. Set it to a
+# falsey value only for niche testing.
+LOCAL_MODE = os.environ.get('LOCAL_MODE', 'true').strip().lower() in ('1', 'true', 'yes', 'on')
 LOCAL_OWNER = {
     'uid': 'local-owner',
     'email': 'local@localhost',
@@ -202,14 +182,11 @@ LOCAL_OWNER = {
 # instance is the hosted student-facing website: it keeps Firebase login + storage,
 # serves strategies over HTTP, and receives uploads -- but it runs NO heavy compute
 # (practice / tournament runs happen only in the local app). Login is required only
-# to UPLOAD; results/landing are public reads. HUB_MODE and LOCAL_MODE are mutually
-# exclusive and both default off (so the test suite models the original hosted app).
-HUB_MODE = os.environ.get('HUB_MODE', '').strip().lower() in ('1', 'true', 'yes', 'on')
+# to UPLOAD; results/landing are public reads.
 
-# Shared class token for the strategy-fetch API (GET /api/strategies). One value used
-# on both sides: the website (HUB_MODE) REQUIRES it; the local app SENDS it (hub_client
+# Shared class token the local app SENDS to the website's strategy-fetch API (hub_client
 # reads the same HUB_API_TOKEN). Not per-user login -- a low-sensitivity read token
-# distributed with the local app config. Blank disables the endpoint (fails closed).
+# provided in the local app config. Blank => the Hub is disabled (offline).
 HUB_API_TOKEN = os.environ.get('HUB_API_TOKEN', '').strip()
 
 app_logger = setup_logging(is_production=IS_PRODUCTION)
@@ -265,10 +242,10 @@ if not _secret_key:
             "FLASK_SECRET_KEY environment variable must be set in production. "
             "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
         )
-    _secret_key = 'dev-insecure-secret-key-do-not-use-in-production'
-    app.logger.warning(
-        "FLASK_SECRET_KEY not set; using a fixed insecure dev key. "
-        "Set FLASK_SECRET_KEY for any non-local deployment."
+    _secret_key = 'ipd-app-local-session-key'
+    app.logger.info(
+        "No FLASK_SECRET_KEY set — using the built-in local session key. That's expected for "
+        "the local app (sessions are local-only). Set FLASK_SECRET_KEY only for a shared deployment."
     )
 app.secret_key = _secret_key
 
@@ -302,28 +279,6 @@ def _inject_local_owner():
         session['user'] = dict(LOCAL_OWNER)
 
 
-# Heavy-compute endpoints (practice + tournament/OS-sim runs). On the hosted website
-# (HUB_MODE) these must never execute -- all compute happens in the local app -- so we
-# fail them fast with a clear message instead of tying up the single free-tier worker.
-COMPUTE_ENDPOINTS = frozenset({
-    'play_game', 'run_tournament', 'nplayer_tournament', 'os_simulation',
-    'admin_run_tournament', 'admin_run_nplayer_tournament', 'admin_run_os_simulation',
-    'admin_run_due_scheduled_tournaments', 'run_official_local',
-})
-
-
-@app.before_request
-def _block_compute_in_hub_mode():
-    """In HUB_MODE, reject the heavy-compute endpoints with 503 + a 'run locally'
-    message. No-op when HUB_MODE is off (the local app and the original hosted app
-    keep running compute normally)."""
-    if HUB_MODE and request.endpoint in COMPUTE_ENDPOINTS:
-        return jsonify({
-            'error': 'Simulations run in the local app, not on the website. '
-                     'Download and run the local app to practice or run tournaments.'
-        }), 503
-
-
 @app.context_processor
 def _inject_csp_nonce():
     """Make {{ csp_nonce }} available in every template."""
@@ -332,9 +287,8 @@ def _inject_csp_nonce():
 
 @app.context_processor
 def _inject_modes():
-    """Expose the deployment mode to templates so the navbar can show the right links
-    (website vs local app)."""
-    return {'HUB_MODE': HUB_MODE, 'LOCAL_MODE': LOCAL_MODE}
+    """Expose LOCAL_MODE to templates."""
+    return {'LOCAL_MODE': LOCAL_MODE}
 
 
 @app.after_request
@@ -379,13 +333,6 @@ EMAIL_DOMAIN_BLACKLIST.extend([
 ])
 
 # ------------------------------
-
-
-def sanitize_firestore_key(key):
-    """Sanitize Firestore document keys to prevent path traversal"""
-    if not key: return None
-    # Allow alphanumeric, hyphens, and underscores only
-    return "".join(c for c in key if c.isalnum() or c in "-_")
 
 
 def validate_name(name, field_type="name"):
@@ -1086,10 +1033,6 @@ def game(player_a_code, player_a_name, player_b_code, player_b_name, rounds=200,
 @app.route('/')
 @login_required
 def index():
-    # On the hosted website there is no local compute, so the practice page is moot;
-    # send visitors to the public results/leaderboard instead.
-    if HUB_MODE:
-        return redirect(url_for('results'))
     return render_template('index.html')
 
 
@@ -1114,107 +1057,6 @@ def index():
 
 
 
-
-
-
-
-# --- Website strategy-fetch API (consumed by local apps) -----------------------
-# The hosted website (HUB_MODE) serves all submitted strategies to local apps over
-# HTTP so students can pull and practice against them WITHOUT any Firebase access on
-# their machine. Gated by a shared class token (not per-user login). Only name/code/
-# author are exposed -- emails/uids are redacted.
-
-def _check_hub_fetch_token():
-    """Return None if the request carries the correct class token, else an error
-    (response, status) tuple. When HUB_API_TOKEN is unset the strategy API is disabled
-    and reads as 404 (fail closed); a missing/wrong token is 401."""
-    if not HUB_API_TOKEN:
-        return jsonify({'error': 'Not found.'}), 404
-    header = request.headers.get('Authorization', '')
-    token = header[7:].strip() if header.startswith('Bearer ') else ''
-    if token != HUB_API_TOKEN:
-        return jsonify({'error': 'Unauthorized.'}), 401
-    return None
-
-
-
-
-
-
-# --- Admin results round-trip (local run -> downloadable file -> website upload) ---
-# Compute is local-only, so an admin runs the official tournament in their LOCAL app
-# (`/admin/run-official`), which fetches the submitted strategies from the website and
-# returns the result as a downloadable JSON. They then UPLOAD that file on the website
-# (`/admin/upload-results`), which stores it so it shows on the public results page.
-
-DEFAULT_WEIGHTS = {'win_rate': 0.33, 'cooperation': 0.34, 'points': 0.33}
-
-
-@app.route('/admin/run-official', methods=['POST'])
-@admin_required
-@limiter.limit("5 per minute")
-def run_official_local():
-    """LOCAL admin tournament: run the official round-robin over the cached submitted
-    players plus any local players, and return a publishable result package (leaderboard
-    + participants + local-bot code). In COMPUTE_ENDPOINTS, so it's blocked in HUB_MODE."""
-    data = request.get_json(silent=True) or {}
-    name = (data.get('name') or 'Official Tournament').strip()
-    rounds = int(data.get('rounds', 200))
-    seed = data.get('seed')
-    weights = data.get('weights') or DEFAULT_WEIGHTS
-    modes = data.get('modes') or ['standard']
-    local_players = data.get('local_players') or []
-
-    # Website players come from the local cache (press Refresh on the Hub to update it).
-    strategies = []
-    for s in _read_strategy_cache():
-        if s.get('code'):
-            strategies.append({'name': s['name'], 'code': s['code'],
-                               'user_id': s.get('id') or s['name'], 'source': 'website'})
-
-    # Local players the admin added — screened by the local sandbox before running.
-    local_bots = []
-    for i, lp in enumerate(local_players):
-        nm = (lp.get('name') or f'House Bot {i + 1}').strip()
-        code = lp.get('code') or ''
-        if not code:
-            continue
-        ok, err = is_safe_code(code)
-        if not ok:
-            return jsonify({'error': f'Local player "{nm}" rejected by sandbox: {err}'}), 400
-        strategies.append({'name': nm, 'code': code, 'user_id': f'local:{nm}', 'source': 'local'})
-        local_bots.append({'name': nm, 'code': code})
-
-    if len(strategies) < 2:
-        return jsonify({'error': 'Need at least 2 players. Press Refresh to fetch submitted '
-                                 'strategies, and/or add local players.'}), 400
-
-    result = round_robin_tournament(strategies, rounds=rounds, modes=modes, weights=weights, seed=seed)
-    weighted_leaderboard, winner = determine_weighted_results(result['leaderboard'], weights)
-
-    participants = []
-    for s in strategies:
-        p = {'name': s['name'], 'source': s['source']}
-        if s['source'] == 'website':
-            p['website_id'] = s['user_id']
-        participants.append(p)
-
-    from datetime import datetime, timezone
-    package = {
-        'name': name,
-        'winner': winner,
-        'participant_count': len(strategies),
-        'total_matches': result['total_matches'],
-        'rounds': rounds,
-        'weights': weights,
-        'modes': modes,
-        'leaderboard': weighted_leaderboard,
-        'participants': participants,
-        'local_bots': local_bots,   # code for the website to register as bots at publish
-        'run_date': datetime.now(timezone.utc).isoformat(),
-        'seed_info': {'seed': seed} if seed is not None else None,
-    }
-    return jsonify(package)
 
 
 @app.route('/hub/publish-result', methods=['POST'])
@@ -1719,11 +1561,6 @@ def run_tournament():
     # Helper for running via simple POST (if used externally)
     data = request.json
 
-    # Practice mode caps — same small ceiling for everyone (admins included) so a co-located
-    # class can't overload the single free-tier worker.
-    MAX_PRACTICE_ROUNDS = int(os.getenv('MAX_PRACTICE_ROUNDS', '250'))
-    strategy_cap = MAX_PRACTICE_STRATEGIES
-
     strategies = data.get('strategies', [])
     rounds = int(data.get('rounds', 200))
     payoff_matrix = data.get('payoff_matrix', None)
@@ -1827,14 +1664,11 @@ def nplayer_tournament():
     
     data = request.json
     
-    # MINOR Issue #6: Env var caps with error handling
-    # Student default is 8 players; admins get a higher ceiling (server enforces below).
+    # Per-match round cap (the only N-player limit still enforced — see below). No strategy-count
+    # cap: the tournament runs on the user's own machine.
     try:
-        MAX_NPLAYER_STRATEGIES = int(os.getenv('MAX_NPLAYER_STRATEGIES', '8'))
         MAX_NPLAYER_ROUNDS = int(os.getenv('MAX_NPLAYER_ROUNDS', '1000'))
     except (ValueError, TypeError):
-        # Fall back to defaults if env vars are invalid
-        MAX_NPLAYER_STRATEGIES = 8
         MAX_NPLAYER_ROUNDS = 1000
 
     user_is_admin = is_admin()
@@ -2142,186 +1976,6 @@ def parse_payoff_model(config):
 
 # Admin API Routes
 
-
-
-# Email format used for both signup and admin bulk-add (kept in sync with the signup route).
-_ADMIN_EMAIL_PATTERN = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
-
-
-def _parse_admin_emails(data):
-    """Collect emails from an admin add-user payload.
-
-    Accepts ``emails`` (a list) and/or ``email`` (a single string that may itself be comma/
-    newline/whitespace separated — e.g. pasted from a CSV). Returns a de-duplicated, order-preserving
-    list (case-insensitive dedupe, original casing kept).
-    """
-    raw = []
-    val = data.get('emails')
-    if isinstance(val, list):
-        raw.extend(val)
-    elif isinstance(val, str):
-        raw.append(val)
-    if data.get('email'):
-        raw.append(data.get('email'))
-
-    tokens = []
-    for item in raw:
-        if not isinstance(item, str):
-            continue
-        # Split on commas, semicolons, and any whitespace (newlines from a CSV paste/upload).
-        tokens.extend(re.split(r'[\s,;]+', item))
-
-    seen = set()
-    out = []
-    for tok in tokens:
-        email = tok.strip()
-        # Require an '@' so CSV header cells ("email") and stray tokens are ignored, not reported
-        # as failures. Full format validation happens per-address in the route.
-        if not email or '@' not in email:
-            continue
-        key = email.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(email)
-    return out
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# Asynchronous tournament jobs
-#
-# A full tournament (200 rounds, many participants) can run for minutes --
-# far longer than PythonAnywhere's ~5 min
-# web-request limit. Running it inside the request handler caused the request
-# to be killed and replaced with an HTML error page, which the frontend then
-# failed to parse as JSON ("Unexpected token '<'"), leaving the progress bar
-# stuck. Instead we validate input synchronously, enqueue a job, run the heavy
-# compute on a daemon worker thread, and let the UI poll
-# /admin/tournament-job/<id> for status.
-# ---------------------------------------------------------------------------
-
-# Jobs left 'queued'/'running' with no heartbeat past this many seconds are
-# treated as dead (worker recycled) and marked failed by the scheduler poll.
-TOURNAMENT_JOB_TIMEOUT_SECONDS = int(os.getenv('TOURNAMENT_JOB_TIMEOUT_SECONDS', '1800'))
-
-
-def _create_tournament_job(job_type, name, created_by):
-    """Create a queued tournament job document and return its id."""
-    from firebase_admin import firestore
-    from firebase_config import db
-    job_id = str(uuid.uuid4())
-    db.collection('tournament_jobs').document(job_id).set({
-        'type': job_type,
-        'name': name,
-        'status': 'queued',
-        'tournament_id': None,
-        'winner': None,
-        'error': None,
-        'created_by': created_by,
-        'created_at': firestore.SERVER_TIMESTAMP,
-        'updated_at': firestore.SERVER_TIMESTAMP,
-    })
-    return job_id
-
-
-def _update_tournament_job(job_id, **fields):
-    """Patch a tournament job document, refreshing its heartbeat timestamp."""
-    from firebase_admin import firestore
-    from firebase_config import db
-    fields['updated_at'] = firestore.SERVER_TIMESTAMP
-    try:
-        db.collection('tournament_jobs').document(job_id).update(fields)
-    except Exception as e:
-        app.logger.error(f"Failed to update tournament job {job_id}: {e}")
-
-
-def _active_tournament_job_exists():
-    """True if a tournament job is currently queued or running.
-
-    Free-tier PythonAnywhere has a single worker and a tight CPU budget, so we
-    only allow one tournament at a time. A query failure is treated as
-    'no active job' so a transient error never blocks running a tournament.
-    """
-    from firebase_config import db
-    try:
-        for status in ('queued', 'running'):
-            for _ in db.collection('tournament_jobs').where('status', '==', status).limit(1).stream():
-                return True
-    except Exception as e:
-        app.logger.error(f"Tournament job concurrency check failed: {e}")
-    return False
-
-
-def _run_tournament_job(job_id, job_type, config):
-    """Daemon-thread worker: run the heavy tournament compute and record status."""
-    try:
-        _update_tournament_job(job_id, status='running')
-        if job_type == 'nplayer':
-            result = _run_nplayer_tournament_core(config)
-        else:
-            result = _run_2player_tournament_core(config)
-        _update_tournament_job(
-            job_id, status='completed',
-            tournament_id=result['tournament_id'], winner=result['winner'],
-        )
-        app.logger.info(f"Tournament job {job_id} ({job_type}) completed -> {result['tournament_id']}")
-    except Exception as e:
-        # Log through the logger (raiseExceptions=False) rather than writing the
-        # traceback straight to stderr, which can itself raise OSError if the worker's
-        # stdout/stderr pipe was closed during a free-tier worker recycle.
-        app.logger.exception(f"Tournament job {job_id} ({job_type}) failed: {e}")
-        _update_tournament_job(job_id, status='failed', error=str(e))
-
-
-def _start_tournament_job(job_type, name, created_by, config):
-    """Create a job and dispatch it to a background daemon thread. Returns job id."""
-    job_id = _create_tournament_job(job_type, name, created_by)
-    thread = threading.Thread(
-        target=_run_tournament_job,
-        args=(job_id, job_type, config),
-        daemon=True,
-        name=f'tournament-job-{job_id}',
-    )
-    thread.start()
-    return job_id
 
 
 def _run_core_simulation(strategies, *, num_cores, scheduler, core_assignment_mode,
@@ -2785,608 +2439,6 @@ def determine_weighted_results(leaderboard, weights):
 
 
 
-def _parse_iso_datetime_utc(value):
-    """Parse an ISO-8601 datetime string into a timezone-aware UTC datetime."""
-    from datetime import datetime, timezone
-
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError('Expected non-empty ISO datetime string')
-
-    text = value.strip()
-    # Support common 'Z' suffix for UTC.
-    if text.endswith('Z'):
-        text = text[:-1] + '+00:00'
-
-    dt = datetime.fromisoformat(text)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
-
-
-def _is_revealed(doc_dict, now=None):
-    """True if a result document is publicly visible.
-
-    Scheduled tournaments are computed immediately but stored hidden with a
-    ``reveal_at`` datetime; they only become public once that time passes. Docs
-    without ``reveal_at`` (ordinary manual runs) are always revealed.
-    """
-    from datetime import datetime, timezone
-
-    reveal_at = (doc_dict or {}).get('reveal_at')
-    if reveal_at is None:
-        return True
-    if now is None:
-        now = datetime.now(timezone.utc)
-    # Firestore returns tz-aware datetimes; guard against naive values just in case.
-    if isinstance(reveal_at, datetime) and reveal_at.tzinfo is None:
-        reveal_at = reveal_at.replace(tzinfo=timezone.utc)
-    try:
-        return reveal_at <= now
-    except TypeError:
-        # Unexpected type -> fail closed (treat as not yet revealed).
-        return False
-
-
-def _datetime_to_iso_z(value):
-    """Convert Firestore/Python datetime objects to compact ISO-8601 '...Z' strings."""
-    from datetime import datetime, timezone
-
-    if value is None:
-        return None
-
-    # Most Firestore timestamp fields arrive as datetime.
-    if isinstance(value, datetime):
-        dt = value
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        dt = dt.astimezone(timezone.utc).replace(microsecond=0)
-        return dt.isoformat().replace('+00:00', 'Z')
-
-    # If it's already JSON-safe (string/number), return as-is.
-    return value
-
-
-
-
-
-
-
-
-def _execute_2player_scheduled_tournament(name, config, reveal_at=None, schedule_id=None):
-    """Run a 2-player tournament from a scheduled config dict.
-
-    The compute happens now (at schedule-creation time), but the stored result is
-    kept hidden until ``reveal_at`` so the public results pages only unlock it once
-    the scheduled time arrives. Returns ``(success, error_str, result_id)``.
-    """
-    from firebase_config import db
-    from datetime import datetime, timezone
-
-    selected_ids = config.get('selected_ids', [])
-    rounds = config.get('rounds') or 200
-    payoff_matrix = config.get('payoff_matrix')
-    modes = config.get('modes') or ['standard']
-    discount_factor = float(config.get('discount_factor') or 0.95)
-    stochastic_prob = float(config.get('stochastic_prob') or 0.995)
-    weights = config.get('weights') or {'win_rate': 0.33, 'cooperation': 0.34, 'points': 0.33}
-    seed = config.get('seed')
-
-    strategies = []
-    for doc in db.collection('tournament_strategies').stream():
-        if selected_ids and doc.id not in selected_ids:
-            continue
-        d = doc.to_dict()
-        strategies.append({
-            'name': d.get('name', 'Unnamed'),
-            'code': d.get('code', 'return "C"'),
-            'player_email': d.get('user_email', 'Unknown'),
-            'player_name': d.get('user_display_name', 'Unknown Player'),
-            'user_id': doc.id,
-        })
-
-    if len(strategies) < 2:
-        return False, f'Only {len(strategies)} strategies available (need ≥2)', None
-
-    result = round_robin_tournament(
-        strategies, rounds, payoff_matrix,
-        modes=modes, discount_factor=discount_factor,
-        stochastic_prob=stochastic_prob, weights=weights, seed=seed,
-    )
-
-    winner = result['leaderboard'][0]['name'] if result.get('leaderboard') else 'Unknown'
-    tournament_data = {
-        'name': name,
-        'leaderboard': result['leaderboard'],
-        'total_matches': result['total_matches'],
-        'run_date': datetime.now(timezone.utc).isoformat(),
-        'rounds': rounds,
-        'modes': modes,
-        'weights': weights,
-        'winner': winner,
-        'participants': [{'name': s['name']} for s in strategies],
-        'participant_count': len(strategies),
-        'from_schedule': True,
-    }
-
-    # Hide the result until its scheduled reveal time. Stored as a real datetime
-    # so the public read endpoints can compare it against "now".
-    if reveal_at is not None:
-        tournament_data['reveal_at'] = reveal_at
-        tournament_data['hidden'] = True
-    if schedule_id is not None:
-        tournament_data['schedule_id'] = schedule_id
-    _ts, doc_ref = db.collection('tournament_results').add(tournament_data)
-    return True, None, doc_ref.id
-
-
-def _execute_nplayer_scheduled_tournament(name, config, reveal_at=None, schedule_id=None):
-    """Run an N-player tournament from a scheduled config dict.
-
-    Computes now but keeps the result hidden until ``reveal_at`` (see the 2-player
-    counterpart). Returns ``(success, error_str, result_id)``.
-    """
-    import uuid
-    from firebase_admin import firestore as _fs
-    from firebase_config import db
-    from datetime import datetime, timezone
-
-    rounds = int(config.get('rounds') or 200)
-    selected_ids = config.get('selected_ids', [])
-    weights = config.get('weights') or {'win_rate': 0.33, 'cooperation': 0.34, 'points': 0.33}
-    payoff_model_config = config.get('payoff_model', None)
-    mode = config.get('mode', 'standard')
-    modes = config.get('modes', None)
-    group_size = config.get('group_size', None)
-    seed = config.get('seed', None)
-    discount_factor = float(config.get('discount_factor') or 0.95)
-    stochastic_prob = float(config.get('stochastic_prob') or 0.995)
-
-    context_modes = modes if modes is not None else [mode]
-
-    # Load strategies
-    strategies = []
-    for doc in db.collection('tournament_strategies').stream():
-        if selected_ids and doc.id not in selected_ids:
-            continue
-        d = doc.to_dict()
-        strategies.append({
-            'name': d.get('name', 'Unnamed'),
-            'code': d.get('code', 'return "C"'),
-            'player_email': d.get('user_email', 'Unknown'),
-            'player_name': d.get('user_display_name', 'Unknown Player'),
-            'user_id': doc.id,
-        })
-
-    if len(strategies) < 1:
-        return False, f'Only {len(strategies)} strategies available (need ≥1)', None
-
-    # Parse payoff model
-    try:
-        payoff_model = parse_payoff_model(payoff_model_config)
-    except Exception as e:
-        return False, f'Invalid payoff model: {e}', None
-
-    # Compile strategies
-    compiled_strategies = []
-    for strat in strategies:
-        code = strat['code']
-        strat_name = strat['name']
-        safe, error = is_safe_code(code)
-        if not safe:
-            return False, f'Strategy "{strat_name}" failed safety check: {error}', None
-        rng = random.Random(seed) if seed is not None else None
-        tournament_info = {
-            'weights': weights,
-            'payoff_model': payoff_model_config.get('type') if payoff_model_config else 'pairwise_matrix',
-            'format': 'n-player',
-            'n_players': len(strategies),
-            'group_size': group_size,
-            'mode': context_modes[0] if context_modes else mode,
-            'modes': context_modes,
-            'discount_factor': discount_factor,
-            'stochastic_prob': stochastic_prob,
-        }
-        globals_dict = get_safe_globals({'TOURNAMENT_INFO': tournament_info}, rng)
-        exec(code, globals_dict)
-        strategy_func = extract_strategy_function(code, globals_dict, prefer_n_args=4)
-        if not callable(strategy_func):
-            return False, f'Strategy "{strat_name}" does not define a callable function', None
-        compiled_strategies.append({'name': strat_name, 'code': code, 'func': strategy_func})
-
-    result = group_tournament(
-        strategies=compiled_strategies,
-        rounds=rounds,
-        group_size=group_size,
-        seed=seed,
-        payoff_model=payoff_model,
-        weights=weights,
-        mode=mode,
-        modes=modes,
-        discount_factor=discount_factor,
-        stochastic_prob=stochastic_prob,
-    )
-
-    weighted_leaderboard, weighted_winner = determine_weighted_results(result.get('leaderboard', []), weights)
-
-    participants = [{'name': s['name']} for s in strategies]
-    tournament_id = str(uuid.uuid4())
-    tournament_doc = {
-        'name': name,
-        'format': 'n-player',
-        'created_at': _fs.SERVER_TIMESTAMP,
-        'rounds': rounds,
-        'group_size': group_size,
-        'seed': seed,
-        'payoff_model': payoff_model_config,
-        'weights': weights,
-        'mode': result.get('tournament_info', {}).get('mode', mode),
-        'modes': result.get('tournament_info', {}).get('modes', context_modes),
-        'discount_factor': discount_factor,
-        'stochastic_prob': stochastic_prob,
-        'participants': participants,
-        'results': weighted_leaderboard,
-        'leaderboard': weighted_leaderboard,
-        'matches': result.get('matches', []),
-        'tournament_info': result.get('tournament_info', {}),
-        'winner': weighted_winner,
-        'participant_count': len(strategies),
-        'total_matches': result.get('tournament_info', {}).get('n_groups', 1),
-        'from_schedule': True,
-    }
-
-    # Hide the result until its scheduled reveal time (see 2-player counterpart).
-    if reveal_at is not None:
-        tournament_doc['reveal_at'] = reveal_at
-        tournament_doc['hidden'] = True
-    if schedule_id is not None:
-        tournament_doc['schedule_id'] = schedule_id
-
-    from firestore_utils import to_firestore_safe
-    db.collection('nplayer_tournament_results').document(tournament_id).set(to_firestore_safe(tournament_doc))
-    return True, None, tournament_id
-
-
-def _execute_os_simulation_scheduled(name, config, reveal_at=None, schedule_id=None):
-    """Run a standalone OS simulation from a scheduled config dict.
-
-    Computes now but keeps the result hidden until ``reveal_at`` (mirrors the tournament
-    executors). Returns ``(success, error_str, result_id)``.
-    """
-    import uuid
-    from firebase_admin import firestore as _fs
-    from firebase_config import db
-    from firestore_utils import to_firestore_safe, encode_core_sim_traces
-
-    selected_ids = config.get('selected_ids', [])
-    num_cores = int(config.get('num_cores', 2))
-    scheduler = config.get('scheduler', 'round_robin')
-    core_assignment_mode = config.get('core_assignment_mode', 'homogeneous')
-    seed = config.get('seed', None)
-
-    # Resolve selected participants to {name, code}.
-    strategies = []
-    for doc in db.collection('tournament_strategies').stream():
-        if selected_ids and doc.id not in selected_ids:
-            continue
-        d = doc.to_dict()
-        strategies.append({'name': d.get('name', 'Unnamed'), 'code': d.get('code', 'return "C"')})
-    if len(strategies) < 2:
-        return False, f'Only {len(strategies)} strategies available (need ≥2)', None
-    if core_assignment_mode == 'heterogeneous':
-        het_error = _heterogeneous_combination_error(num_cores, len(strategies))
-        if het_error:
-            return False, het_error, None
-
-    try:
-        result = run_standalone_core_simulation(
-            strategies, num_cores=num_cores, scheduler=scheduler,
-            core_assignment_mode=core_assignment_mode, seed=seed)
-    except Exception as e:
-        return False, f'OS simulation failed: {e}', None
-
-    sim_id = str(uuid.uuid4())
-    sim_doc = {
-        'name': name,
-        'format': 'os-simulation',
-        'created_at': _fs.SERVER_TIMESTAMP,
-        'num_cores': num_cores,
-        'scheduler': scheduler,
-        'core_assignment_mode': core_assignment_mode,
-        'seed': seed,
-        'participants': [s['name'] for s in strategies],
-        'core_simulation_results': result.get('core_simulation_results'),
-        'core_simulation_heterogeneous': result.get('core_simulation_heterogeneous'),
-        # Firestore-safe trace encoding (arrays-of-arrays are rejected otherwise).
-        'core_simulation_config': encode_core_sim_traces(result.get('core_simulation_config')),
-    }
-    if reveal_at is not None:
-        sim_doc['reveal_at'] = reveal_at
-        sim_doc['hidden'] = True
-    if schedule_id is not None:
-        sim_doc['schedule_id'] = schedule_id
-    db.collection('os_simulation_results').document(sim_id).set(to_firestore_safe(sim_doc))
-    return True, None, sim_id
-
-
-# Maps a schedule collection to the function that executes its tournaments. Used by
-# the eager "run now, reveal later" dispatcher below.
-_SCHEDULE_EXECUTORS = {
-    'tournament_schedule': _execute_2player_scheduled_tournament,
-    'nplayer_tournament_schedule': _execute_nplayer_scheduled_tournament,
-    'os_simulation_schedule': _execute_os_simulation_scheduled,
-}
-
-
-def _run_scheduled_tournament_now(collection, schedule_id, name, config, reveal_at):
-    """Compute a scheduled tournament immediately and record its outcome.
-
-    The result document is written hidden until ``reveal_at`` (the schedule's
-    ``scheduled_for``); we only track running/completed/failed status on the
-    schedule doc here. Designed to run on a daemon thread so it can't hit the
-    ~5-min web-request limit on PythonAnywhere free tier.
-    """
-    from firebase_admin import firestore as _fs
-    from firebase_config import db
-
-    executor = _SCHEDULE_EXECUTORS[collection]
-    schedule_ref = db.collection(collection).document(schedule_id)
-    try:
-        schedule_ref.update({'status': 'running'})
-        ok, err, result_id = executor(name, config, reveal_at=reveal_at, schedule_id=schedule_id)
-        if ok:
-            schedule_ref.update({
-                'status': 'completed',
-                'result_id': result_id,
-                'executed_at': _fs.SERVER_TIMESTAMP,
-            })
-            app.logger.info(f"Scheduled tournament '{name}' computed -> result {result_id} (reveals at {reveal_at})")
-        else:
-            schedule_ref.update({'status': 'failed', 'error': err})
-            app.logger.error(f"Scheduled tournament '{name}' failed: {err}")
-    except Exception as exc:
-        app.logger.exception(f"Scheduled tournament '{name}' raised: {exc}")
-        try:
-            schedule_ref.update({'status': 'failed', 'error': str(exc)})
-        except Exception:
-            pass
-
-
-def _dispatch_scheduled_tournament(collection, schedule_id, name, config, reveal_at):
-    """Run a scheduled tournament now: inline under the test sync flag, else on a
-    background daemon thread (mirrors _start_tournament_job)."""
-    if app.config.get('RUN_TOURNAMENTS_SYNC'):
-        _run_scheduled_tournament_now(collection, schedule_id, name, config, reveal_at)
-        return
-    thread = threading.Thread(
-        target=_run_scheduled_tournament_now,
-        args=(collection, schedule_id, name, config, reveal_at),
-        daemon=True,
-        name=f'scheduled-tournament-{schedule_id}',
-    )
-    thread.start()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def _replay_nplayer_tournament(package, db):
-    """Helper function to replay N-player tournament from package (stub - not yet implemented)"""
-    return jsonify({
-        'error': 'N-player tournament replay is not yet implemented. Please use 2-player tournament replay.'
-    }), 501
-
-
-def _replay_2player_tournament(package, db):
-    """Helper function to replay 2-player tournament from package"""
-    from firebase_admin import firestore
-    import uuid
-    from tournament_package import extract_run_config_from_package
-    
-    try:
-        # Extract configuration from package
-        config = extract_run_config_from_package(package)
-        
-        # Build strategies list from package participants
-        strategies = []
-        for participant in package['participants']:
-            # Skip participants without code (redacted packages)
-            if 'code' not in participant or participant['code'] is None:
-                return jsonify({'error': 'Cannot replay package without strategy code'}), 400
-            
-            # Validate code safety
-            code = participant['code']
-            safe, safety_error = is_safe_code(code)
-            if not safe:
-                return jsonify({
-                    'error': f"Unsafe code in participant '{participant['label']}': {safety_error}"
-                }), 400
-            
-            strategies.append({
-                'name': participant['label'],
-                'code': code,
-                'player_email': participant.get('email') or 'replayed@system.local',
-                'player_name': participant.get('display_name') or f"Replayed_{participant['label']}",
-                'user_id': participant['stable_id']
-            })
-        
-        if len(strategies) < 2:
-            return jsonify({'error': 'At least 2 strategies with code required to replay tournament'}), 400
-        
-        # Extract tournament configuration
-        tournament_name = config['name']
-        rounds = config.get('rounds') or 200
-        modes = config['modes']
-        discount_factor = config.get('discount_factor') or 0.95
-        stochastic_prob = config.get('stochastic_prob') or 0.995
-        payoff_matrix = config['payoff_matrix']
-        weights = config['weights']
-        
-        # Extract seed for determinism
-        seed_info = config.get('seed_info')
-        tournament_seed = seed_info.get('tournament_seed') if seed_info else None
-        
-        # Run tournament engine
-        app.logger.info(f"Replaying tournament '{tournament_name}' with {len(strategies)} strategies")
-        tournament_result = round_robin_tournament(
-            strategies,
-            rounds,
-            payoff_matrix,
-            modes=modes,
-            discount_factor=discount_factor,
-            stochastic_prob=stochastic_prob,
-            weights=weights,
-            seed=tournament_seed
-        )
-        
-        # Check if tournament ran successfully
-        if 'error' in tournament_result:
-            return jsonify({'error': f"Tournament failed: {tournament_result['error']}"}), 500
-        
-        # Extract winner from leaderboard (first place)
-        leaderboard = tournament_result['leaderboard']
-        winner = leaderboard[0]['name'] if leaderboard else 'Unknown'
-        
-        # Store result in Firestore with new tournament_id
-        new_tournament_id = str(uuid.uuid4())
-        
-        tournament_doc = {
-            'name': tournament_name,
-            'rounds': rounds,
-            'modes': modes,
-            'discount_factor': discount_factor,
-            'stochastic_prob': stochastic_prob,
-            'payoff_matrix': payoff_matrix,
-            'weights': weights,
-            'seed_info': seed_info,
-            'participants': strategies,
-            'winner': winner,
-            'leaderboard': leaderboard,
-            'matches': tournament_result.get('matches', []),
-            'total_matches': tournament_result['total_matches'],
-            'participant_count': len(strategies),
-            'run_date': firestore.SERVER_TIMESTAMP,
-            'run_by': session['user']['uid'],
-            'replayed_from_package': True,
-            'original_package_sha256': package['integrity']['package_sha256'],
-            # Core-sim fields (not used in replay but kept for schema consistency)
-            'core_simulation_config': None,
-            'core_simulation_results': None
-        }
-        
-        db.collection('tournament_results').document(new_tournament_id).set(tournament_doc)
-        
-        # Log audit event
-        context = get_request_context(request)
-        log_audit_event(
-            action='tournament_replayed',
-            actor_uid=session['user']['uid'],
-            actor_email=session['user']['email'],
-            actor_role=session['user'].get('role', 'admin'),
-            remote_ip=context['remote_ip'],
-            user_agent=context['user_agent'],
-            success=True,
-            metadata={
-                'tournament_id': new_tournament_id,
-                'package_sha256': package['integrity']['package_sha256'],
-                'original_tournament_id': package.get('source', {}).get('tournament_id'),
-                'tournament_name': tournament_name,
-                'participant_count': len(strategies)
-            }
-        )
-        
-        # Return success with results
-        return jsonify({
-            'success': True,
-            'tournament_id': new_tournament_id,
-            'winner': winner,
-            'leaderboard': leaderboard
-        }), 200
-        
-    except ValueError as e:
-        # ValueError typically comes from validation or expected checks
-        app.logger.warning(f"Replay validation error: {str(e)}")
-        return jsonify({'error': str(e)}), 400
-    
-    except Exception as e:
-        # Unexpected errors
-        app.logger.error(f"Replay unexpected error: {str(e)}", exc_info=True)
-        return jsonify({'error': 'Failed to replay tournament. Please check package validity.'}), 500
-
-
-
-
-
-
-def _recover_stale_tournament_jobs():
-    """Mark abandoned async tournament jobs as failed.
-
-    Scheduled tournaments no longer need a background runner -- they compute at
-    schedule-creation time and reveal at their scheduled_for (see
-    _dispatch_scheduled_tournament). This periodic task only protects the separate
-    manual async-run path: a free-tier worker can be recycled mid-run, leaving a
-    'tournament_jobs' entry stuck in 'queued'/'running' forever (the UI would poll
-    it indefinitely). Mark such jobs failed once their heartbeat is too old.
-    """
-    from firebase_admin import firestore as _fs
-    from firebase_config import db
-    from datetime import datetime, timezone, timedelta
-
-    now = datetime.now(timezone.utc)
-    try:
-        cutoff = now - timedelta(seconds=TOURNAMENT_JOB_TIMEOUT_SECONDS)
-        for status in ('queued', 'running'):
-            for doc in db.collection('tournament_jobs').where('status', '==', status).stream():
-                d = doc.to_dict()
-                updated = d.get('updated_at')
-                if updated is not None and updated < cutoff:
-                    doc.reference.update({
-                        'status': 'failed',
-                        'error': 'Worker timed out or was recycled before the tournament finished.',
-                        'updated_at': _fs.SERVER_TIMESTAMP,
-                    })
-                    app.logger.warning(f"Marked stale tournament job {doc.id} as failed")
-    except Exception as e:
-        app.logger.error(f"Stale tournament-job recovery error: {e}")
-
-
-def _scheduler_loop():
-    import time
-    while True:
-        time.sleep(60)
-        try:
-            _recover_stale_tournament_jobs()
-        except Exception as e:
-            app.logger.error(f"Scheduler loop error: {e}")
-
-
-import threading as _threading
-_scheduler_thread = _threading.Thread(target=_scheduler_loop, daemon=True, name='tournament-job-recovery')
-_scheduler_thread.start()
 
 
 if __name__ == '__main__':

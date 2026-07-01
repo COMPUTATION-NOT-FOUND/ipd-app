@@ -51,6 +51,8 @@ cover/
 .env
 .env.local
 .env.*.local
+.env.local-bak
+*.bak
 .venv
 env/
 venv/
