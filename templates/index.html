@@ -230,10 +230,12 @@
             <button data-action="startTournament" id="tournamentBtn" style="background: var(--success-color); color: white; font-size: 1.1em; padding: 15px 30px;"><i class="fas fa-play"></i> Start Round Robin Tournament</button>
         </div>
 
-        <!-- Tournament Results (bottom, mirrors N-player & OS sim) -->
-        <div id="results"></div>
-        <div id="submitPanel" style="display:none;"></div>
-    </div>
+    </div><!-- /.strategy (1v1 controls) -->
+
+    <!-- Results + submit sit OUTSIDE the controls card so each renders as its own card
+         (matching N-Player / OS-sim), separated by the dark page background. -->
+    <div id="results"></div>
+    <div id="submitPanel" style="display:none;"></div>
     </div><!-- /practice1v1Tab -->
 
     <!-- N-Player Practice Section -->
@@ -663,7 +665,7 @@
             el.style.display = 'block';
             // Per-mode element ids so the 1v1 / N-Player / OS-sim panels don't collide.
             el.innerHTML = `
-              <div class="results" style="border:1px solid var(--info-color); margin-top:20px;">
+              <div class="results" style="border:1px solid var(--info-color); margin-top:20px; background: var(--bg-card);">
                 <h3><i class="fas fa-cloud-arrow-up"></i> Submit results to website (admin)</h3>
                 <p>Publishes this tournament to the website. ${locals} local player(s) will be saved there
                 as bots (player submissions and practice strategies are not re-registered). You'll log in
@@ -779,7 +781,7 @@
                 ? `, Modes: ${result.modes.join(', ')}` : '';
             const roundsText = result.rounds ? `, ${result.rounds} rounds` : '';
             let html = `
-                <div class="results" style="border-left: 4px solid var(--primary-color);">
+                <div class="results" style="border-left: 4px solid var(--primary-color); background: var(--bg-card);">
                     <h3 style="color: var(--primary-color) !important;"><i class="fas fa-trophy"></i> 1v1 Results</h3>
                     <div style="background: rgba(0,0,0,0.2); padding: 10px; margin-bottom: 20px;">
                         <strong>Info:</strong> ${result.leaderboard.length} strategies, ${result.matches.length} matches${roundsText}${modesText}
