@@ -13,36 +13,65 @@ You will:
 
 ## 1. Set it up (one time)
 
-**You need Python 3.10+.** Check with `python --version` (or `python3 --version`). If you don't
+**You need Python 3.10+.** Check with `python3 --version` (or `python --version`). If you don't
 have it, install it from [python.org](https://www.python.org/downloads/).
 
+We install into a **virtual environment** (a `.venv` folder) so this app's packages stay isolated
+from the rest of your system. Pick your OS below.
+
+**Step 1 — get the app** (your instructor gives you the exact URL):
 ```bash
-# 1) Get the app (your instructor will give you the exact URL)
 git clone <repo-url>
 cd ipd-app
+```
 
-# 2) Install the dependencies
+**Step 2 — create & activate the virtual environment, then install:**
+
+<details open><summary><strong>Linux / Ubuntu / macOS</strong></summary>
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate          # your prompt now shows (.venv)
 pip install -r requirements.txt
+```
+> On a fresh **Ubuntu/Debian** box you may first need the venv + pip packages:
+> `sudo apt update && sudo apt install -y python3-venv python3-pip`
+</details>
 
-# 3) Create your config file
-cp .env.example .env            # Windows (PowerShell):  copy .env.example .env
+<details><summary><strong>Windows (PowerShell)</strong></summary>
 
-# 4) Run it
-python app.py                   # Windows, if that hangs:  waitress-serve app:app
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1        # your prompt now shows (.venv)
+pip install -r requirements.txt
+```
+> If activation is blocked, run once:
+> `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
+</details>
+
+**Step 3 — run it:**
+```bash
+python app.py                       # Windows, if that hangs: waitress-serve app:app
 ```
 
 Then open **http://127.0.0.1:5000** in your browser. That's it — the app is running.
 
-> Open `.env` in a text editor and set `FLASK_SECRET_KEY` to any random text. To connect to the
-> class website (to see classmates' strategies and submit your own), also paste in the two values
-> your instructor gives you:
->
-> ```ini
-> HUB_BASE_URL=https://<your-class-site>.pythonanywhere.com
-> HUB_API_TOKEN=<the shared class token>
-> ```
->
-> Without these the app still works fully offline — you just won't see the class gallery.
+> Each new terminal, re-activate the environment before running: `source .venv/bin/activate`
+> (Linux/macOS) or `.\.venv\Scripts\Activate.ps1` (Windows).
+
+**Connecting to the class website (optional).** The app runs out of the box with no config. To see
+classmates' strategies and submit your own, copy the example config and add the two values your
+instructor gives you:
+
+```bash
+cp .env.example .env                # Windows (PowerShell): copy .env.example .env
+```
+```ini
+HUB_BASE_URL=https://<your-class-site>.pythonanywhere.com
+HUB_API_TOKEN=<the shared class token>
+```
+> Without these the app still works fully offline — you just won't see the class gallery. You don't
+> need to set anything else; the other settings have safe built-in defaults.
 
 ---
 
