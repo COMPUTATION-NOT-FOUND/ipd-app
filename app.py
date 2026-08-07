@@ -42,14 +42,35 @@ from n_player_simulation import group_tournament, call_strategy
 from tournament_package import sha256_text, canonical_json
 
 # --- SECURITY & LIMITS ---
-class InstructionLimitExceeded(Exception):
-    """Raised when a strategy executes too many instructions (loops)."""
+class InstructionLimitExceeded(BaseException):
+    """Raised when a strategy executes too many instructions (loops).
+
+    Derives from BaseException, NOT Exception, on purpose: sandboxed strategies can name
+    `Exception`, so a `while True: try: ... except Exception: pass` body would otherwise
+    swallow this and defeat the instruction cap entirely. Every run_with_limit call site
+    catches InstructionLimitExceeded explicitly before its `except Exception` clause.
+    """
     pass
 
-def run_with_limit(func, *args, limit=10000):
+
+# Per-round instruction (line-event) budget for a single strategy call. Bounds runaway loops
+# without disqualifying legitimately expensive strategies -- e.g. a suffix-tree strategy that
+# does real work per round used to die mid-match under the old 10,000 budget. Matches run on the
+# user's own machine, so this is the only runtime bound (there is no wall-clock cap).
+try:
+    MAX_STRATEGY_INSTRUCTIONS = int(os.environ.get('MAX_STRATEGY_INSTRUCTIONS', '200000'))
+except (TypeError, ValueError):
+    MAX_STRATEGY_INSTRUCTIONS = 200000
+if MAX_STRATEGY_INSTRUCTIONS < 1000:
+    MAX_STRATEGY_INSTRUCTIONS = 200000
+
+
+def run_with_limit(func, *args, limit=None):
     """Execute a function with a strict instruction (line) limit using closure."""
+    if limit is None:
+        limit = MAX_STRATEGY_INSTRUCTIONS
     instr_count = [limit]  # Use mutable list so trace function can modify it
-    
+
     def trace_instructions(frame, event, arg):
         """Trace function to count lines and enforce limits."""
         if event == 'line':
@@ -409,6 +430,82 @@ from core_simulation import ALLOWED_IMPORTS
 _real_import = __import__
 
 
+# Guarded attribute access for the sandbox. `is_safe_code` blocks `x.__class__` syntactically
+# (any ast.Attribute whose name starts with '_'), but the *string* form getattr(x, '__class__')
+# is invisible to the AST screen and would walk straight out of the sandbox. These wrappers apply
+# the exact same rule at runtime, so strategies get ordinary attribute helpers without the hole.
+def _guarded_getattr(obj, name, *default):
+    if isinstance(name, str) and name.startswith('_'):
+        raise AttributeError(f"Access to internal attribute '{name}' is not allowed")
+    return getattr(obj, name, *default)
+
+
+def _guarded_setattr(obj, name, value):
+    if isinstance(name, str) and name.startswith('_'):
+        raise AttributeError(f"Setting internal attribute '{name}' is not allowed")
+    setattr(obj, name, value)
+
+
+def _guarded_delattr(obj, name):
+    if isinstance(name, str) and name.startswith('_'):
+        raise AttributeError(f"Deleting internal attribute '{name}' is not allowed")
+    delattr(obj, name)
+
+
+def _guarded_hasattr(obj, name):
+    # Returns False rather than raising -- hasattr's contract is a bool, and a raising
+    # hasattr would be a surprising trap in otherwise-correct strategy code.
+    if isinstance(name, str) and name.startswith('_'):
+        return False
+    return hasattr(obj, name)
+
+
+# Builtins exposed to sandboxed strategy code. Kept byte-identical across the three copies
+# (app.py, core_simulation.py, ipd-hub/app.py) so a strategy behaves the same in 1v1, N-Player,
+# the OS sim and the Hub. Notable inclusions/exclusions:
+#   * __build_class__ -- CPython resolves this through __builtins__ for EVERY `class` statement,
+#     so without it no strategy can define a class at all.
+#   * exception classes -- without them `except ValueError:` is itself a NameError.
+#   * BaseException is deliberately absent: InstructionLimitExceeded derives from it precisely so
+#     that `except Exception:` inside a strategy cannot swallow the instruction cap.
+#   * `format` the builtin is safe; the traversal vector is "{0.__class__}".format(...) and
+#     string.Formatter, both still blocked by _FORMAT_TRAVERSAL_METHODS in is_safe_code.
+#   * exec/eval/compile/open/input/print stay out (also rejected statically by is_safe_code).
+_SANDBOX_BUILTINS = {
+    'abs': abs, 'all': all, 'any': any, 'bool': bool,
+    'complex': complex, 'divmod': divmod, 'enumerate': enumerate,
+    'filter': filter, 'float': float, 'int': int, 'len': len,
+    'list': list, 'map': map, 'max': max, 'min': min,
+    'pow': pow, 'range': range, 'reversed': reversed,
+    'round': round, 'set': set, 'sorted': sorted,
+    'str': str, 'sum': sum, 'tuple': tuple, 'zip': zip,
+    'dict': dict,
+    # --- class support ---
+    '__build_class__': __build_class__,
+    'object': object, 'super': super, 'property': property,
+    'staticmethod': staticmethod, 'classmethod': classmethod,
+    # --- ordinary builtins strategies routinely assume ---
+    'ord': ord, 'chr': chr, 'isinstance': isinstance, 'issubclass': issubclass,
+    'type': type, 'frozenset': frozenset, 'bytes': bytes, 'hash': hash,
+    'repr': repr, 'iter': iter, 'next': next, 'slice': slice,
+    'callable': callable, 'id': id, 'format': format,
+    'bin': bin, 'hex': hex, 'oct': oct,
+    # --- guarded attribute access (see wrappers above) ---
+    'getattr': _guarded_getattr, 'setattr': _guarded_setattr,
+    'delattr': _guarded_delattr, 'hasattr': _guarded_hasattr,
+    # --- exception classes ---
+    'Exception': Exception, 'ArithmeticError': ArithmeticError,
+    'ZeroDivisionError': ZeroDivisionError, 'OverflowError': OverflowError,
+    'FloatingPointError': FloatingPointError,
+    'ValueError': ValueError, 'TypeError': TypeError, 'KeyError': KeyError,
+    'IndexError': IndexError, 'LookupError': LookupError,
+    'AttributeError': AttributeError, 'NameError': NameError,
+    'RuntimeError': RuntimeError, 'RecursionError': RecursionError,
+    'StopIteration': StopIteration, 'NotImplementedError': NotImplementedError,
+    'AssertionError': AssertionError,
+}
+
+
 def is_safe_code(code):
     """Statically analyze code to ensure it's safe."""
     if not isinstance(code, str):
@@ -562,24 +659,23 @@ def get_safe_globals(context=None, rng=None):
             raise ImportError(f"Import of '{name}' is not allowed in strategy code")
         return _real_import(name, globals, locals, fromlist, level)
 
-    safe_builtins = {
-        'abs': abs, 'all': all, 'any': any, 'bool': bool,
-        'complex': complex, 'divmod': divmod, 'enumerate': enumerate,
-        'filter': filter, 'float': float, 'int': int, 'len': len,
-        'list': list, 'map': map, 'max': max, 'min': min,
-        'pow': pow, 'range': range, 'reversed': reversed,
-        'round': round, 'set': set, 'sorted': sorted,
-        'str': str, 'sum': sum, 'tuple': tuple, 'zip': zip,
-        'dict': dict,
+    # Fresh copy per call: the two closures below capture this call's globals_dict/_safe_import,
+    # and a shared mutable dict would let one strategy's exec leak names into another's.
+    safe_builtins = dict(_SANDBOX_BUILTINS)
+    safe_builtins.update({
         '__import__': _safe_import,
         'globals': lambda: globals_dict  # Allow strategies to check what's in their globals
-    }
+    })
 
     # Use provided RNG instance or module-level random
     random_obj = rng if rng is not None else random
 
     globals_dict.update({
         '__builtins__': safe_builtins,
+        # Required for `class` statements: a class body evaluates `__module__ = __name__`, so
+        # without this every class definition dies with "name '__name__' is not defined".
+        # An inert placeholder, not a real module name -- nothing can be looked up from it.
+        '__name__': 'strategy',
         'random': random_obj,
         'math': math,
         'randint': random_obj.randint if rng else randint
@@ -615,14 +711,21 @@ def extract_strategy_function(code, globals_dict, prefer_n_args=3):
                 # Count parameters
                 function_signatures[node.name] = len(node.args.args)
         
-        # If we found function definitions, prefer ones with preferred parameter count
+        # If we found function definitions, prefer ones with preferred parameter count.
+        # Try the requested arity, then the OTHER supported entry-point arity, then give up
+        # and take the first function defined. The middle pass matters: without it, a strategy
+        # that defines a helper above its 3-arg entry point has the HELPER selected as the
+        # strategy (and then fails with a TypeError on the first round), because the caller
+        # asks for prefer_n_args=4. Mirrors extract_strategy_func() in core_simulation.py.
         if function_names:
-            # First try to find a function with exactly prefer_n_args parameters
-            for func_name in function_names:
-                if function_signatures.get(func_name) == prefer_n_args and func_name in globals_dict and callable(globals_dict[func_name]):
-                    return globals_dict[func_name]
-            
-            # If no preferred-param function, take the first one we found
+            for n_args in (prefer_n_args, 4, 3):
+                for func_name in function_names:
+                    if (function_signatures.get(func_name) == n_args
+                            and func_name in globals_dict
+                            and callable(globals_dict[func_name])):
+                        return globals_dict[func_name]
+
+            # No function with a recognised entry-point arity: take the first one we found
             for func_name in function_names:
                 if func_name in globals_dict and callable(globals_dict[func_name]):
                     return globals_dict[func_name]
@@ -851,7 +954,7 @@ def game(player_a_code, player_a_name, player_b_code, player_b_name, rounds=200,
         try:
             last_moves_a = [enemy_history[-1]] if enemy_history else []
             meta_a = {'round': current_round, 'n_players': 2, 'player_index': 0, 'tournament_info': tournament_info, 'rng': rng}
-            A_guess = run_with_limit(call_strategy, player_a_func, last_moves_a, user_history.copy(), [enemy_history.copy()], meta_a, limit=10000)
+            A_guess = run_with_limit(call_strategy, player_a_func, last_moves_a, user_history.copy(), [enemy_history.copy()], meta_a, limit=MAX_STRATEGY_INSTRUCTIONS)
         except InstructionLimitExceeded as e:
             error_msg = "Strategy exceeded instruction limit (infinite loop detected)"
             app.logger.error(f"Player A: {error_msg}")
@@ -888,7 +991,7 @@ def game(player_a_code, player_a_name, player_b_code, player_b_name, rounds=200,
             try:
                 last_moves_b = [user_history[-1]] if user_history else []
                 meta_b = {'round': current_round, 'n_players': 2, 'player_index': 1, 'tournament_info': tournament_info, 'rng': rng}
-                B_guess = run_with_limit(call_strategy, player_b_func, last_moves_b, enemy_history.copy(), [user_history.copy()], meta_b, limit=10000)
+                B_guess = run_with_limit(call_strategy, player_b_func, last_moves_b, enemy_history.copy(), [user_history.copy()], meta_b, limit=MAX_STRATEGY_INSTRUCTIONS)
             except InstructionLimitExceeded as e:
                 error_msg = "Strategy exceeded instruction limit (infinite loop detected)"
                 app.logger.error(f"Player B: {error_msg}")

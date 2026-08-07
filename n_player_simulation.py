@@ -5,18 +5,37 @@ Implements game_n() for executing N-player Prisoner's Dilemma matches
 with backward compatibility for legacy 3-arg strategies.
 """
 
+import os
 import sys
 import random
 from typing import Callable, Any
 
 
-class InstructionLimitExceeded(Exception):
-    """Raised when a strategy executes too many instructions."""
+class InstructionLimitExceeded(BaseException):
+    """Raised when a strategy executes too many instructions.
+
+    Derives from BaseException, NOT Exception, on purpose: sandboxed strategies can name
+    `Exception`, so a `while True: try: ... except Exception: pass` body would otherwise
+    swallow this and defeat the instruction cap entirely. Every run_with_limit call site
+    catches InstructionLimitExceeded explicitly before its `except Exception` clause.
+    """
     pass
 
 
-def run_with_limit(func, *args, limit=10000):
+# Per-round instruction (line-event) budget for a single strategy call. Mirrors app.py's
+# constant -- keep the two defaults in step.
+try:
+    MAX_STRATEGY_INSTRUCTIONS = int(os.environ.get('MAX_STRATEGY_INSTRUCTIONS', '200000'))
+except (TypeError, ValueError):
+    MAX_STRATEGY_INSTRUCTIONS = 200000
+if MAX_STRATEGY_INSTRUCTIONS < 1000:
+    MAX_STRATEGY_INSTRUCTIONS = 200000
+
+
+def run_with_limit(func, *args, limit=None):
     """Execute a function with a strict instruction (line) limit using closure."""
+    if limit is None:
+        limit = MAX_STRATEGY_INSTRUCTIONS
     instr_count = [limit]  # Use mutable list so trace function can modify it
     
     def trace_instructions(frame, event, arg):
@@ -218,7 +237,7 @@ def game_n(
                     my_history,
                     opponents_histories,
                     meta,
-                    limit=10000
+                    limit=MAX_STRATEGY_INSTRUCTIONS
                 )
             except InstructionLimitExceeded:
                 # If strategy exceeds limit, default to cooperate

@@ -18,6 +18,81 @@ ALLOWED_IMPORTS = frozenset({
 # Capture the real __import__ at module load so the sandbox wrapper can delegate to it.
 _real_import = __import__
 
+
+# Guarded attribute access for the sandbox. `is_safe_code` (app.py) blocks `x.__class__`
+# syntactically, but the string form getattr(x, '__class__') is invisible to the AST screen and
+# would walk straight out of the sandbox. These wrappers apply the same rule at runtime.
+def _guarded_getattr(obj, name, *default):
+    if isinstance(name, str) and name.startswith('_'):
+        raise AttributeError(f"Access to internal attribute '{name}' is not allowed")
+    return getattr(obj, name, *default)
+
+
+def _guarded_setattr(obj, name, value):
+    if isinstance(name, str) and name.startswith('_'):
+        raise AttributeError(f"Setting internal attribute '{name}' is not allowed")
+    setattr(obj, name, value)
+
+
+def _guarded_delattr(obj, name):
+    if isinstance(name, str) and name.startswith('_'):
+        raise AttributeError(f"Deleting internal attribute '{name}' is not allowed")
+    delattr(obj, name)
+
+
+def _guarded_hasattr(obj, name):
+    # Returns False rather than raising -- hasattr's contract is a bool.
+    if isinstance(name, str) and name.startswith('_'):
+        return False
+    return hasattr(obj, name)
+
+
+# Builtins exposed to sandboxed strategy code. Kept byte-identical across the three copies
+# (app.py, core_simulation.py, ipd-hub/app.py) so a strategy behaves the same in 1v1, N-Player,
+# the OS sim and the Hub. Notable inclusions/exclusions:
+#   * __build_class__ -- CPython resolves this through __builtins__ for EVERY `class` statement,
+#     so without it no strategy can define a class at all.
+#   * exception classes -- without them `except ValueError:` is itself a NameError.
+#   * BaseException is deliberately absent: InstructionLimitExceeded derives from it precisely so
+#     that `except Exception:` inside a strategy cannot swallow the instruction cap.
+#   * `format` the builtin is safe; the traversal vector is "{0.__class__}".format(...) and
+#     string.Formatter, both still blocked by _FORMAT_TRAVERSAL_METHODS in is_safe_code.
+#   * exec/eval/compile/open/input/print stay out (also rejected statically by is_safe_code).
+_SANDBOX_BUILTINS = {
+    'abs': abs, 'all': all, 'any': any, 'bool': bool,
+    'complex': complex, 'divmod': divmod, 'enumerate': enumerate,
+    'filter': filter, 'float': float, 'int': int, 'len': len,
+    'list': list, 'map': map, 'max': max, 'min': min,
+    'pow': pow, 'range': range, 'reversed': reversed,
+    'round': round, 'set': set, 'sorted': sorted,
+    'str': str, 'sum': sum, 'tuple': tuple, 'zip': zip,
+    'dict': dict,
+    # --- class support ---
+    '__build_class__': __build_class__,
+    'object': object, 'super': super, 'property': property,
+    'staticmethod': staticmethod, 'classmethod': classmethod,
+    # --- ordinary builtins strategies routinely assume ---
+    'ord': ord, 'chr': chr, 'isinstance': isinstance, 'issubclass': issubclass,
+    'type': type, 'frozenset': frozenset, 'bytes': bytes, 'hash': hash,
+    'repr': repr, 'iter': iter, 'next': next, 'slice': slice,
+    'callable': callable, 'id': id, 'format': format,
+    'bin': bin, 'hex': hex, 'oct': oct,
+    # --- guarded attribute access (see wrappers above) ---
+    'getattr': _guarded_getattr, 'setattr': _guarded_setattr,
+    'delattr': _guarded_delattr, 'hasattr': _guarded_hasattr,
+    # --- exception classes ---
+    'Exception': Exception, 'ArithmeticError': ArithmeticError,
+    'ZeroDivisionError': ZeroDivisionError, 'OverflowError': OverflowError,
+    'FloatingPointError': FloatingPointError,
+    'ValueError': ValueError, 'TypeError': TypeError, 'KeyError': KeyError,
+    'IndexError': IndexError, 'LookupError': LookupError,
+    'AttributeError': AttributeError, 'NameError': NameError,
+    'RuntimeError': RuntimeError, 'RecursionError': RecursionError,
+    'StopIteration': StopIteration, 'NotImplementedError': NotImplementedError,
+    'AssertionError': AssertionError,
+}
+
+
 def get_safe_globals(seed=None):
     """Return a dictionary of safe globals for strategy execution.
 
@@ -42,23 +117,20 @@ def get_safe_globals(seed=None):
             raise ImportError(f"Import of '{name}' is not allowed in strategy code")
         return _real_import(name, globals, locals, fromlist, level)
 
-    safe_builtins = {
-        'abs': abs, 'all': all, 'any': any, 'bool': bool,
-        'complex': complex, 'divmod': divmod, 'enumerate': enumerate,
-        'filter': filter, 'float': float, 'int': int, 'len': len,
-        'list': list, 'map': map, 'max': max, 'min': min,
-        'pow': pow, 'range': range, 'reversed': reversed,
-        'round': round, 'set': set, 'sorted': sorted,
-        'str': str, 'sum': sum, 'tuple': tuple, 'zip': zip,
-        'dict': dict,
-        '__import__': _safe_import,
-    }
+    # Fresh copy per call: _safe_import below is a closure over this call, and a shared mutable
+    # dict would let one strategy's exec leak names into another's.
+    safe_builtins = dict(_SANDBOX_BUILTINS)
+    safe_builtins['__import__'] = _safe_import
 
     # Provide seeded random instance if seed is given, otherwise global module
     random_provider = random.Random(seed) if seed is not None else random
 
     globals_dict.update({
         '__builtins__': safe_builtins,
+        # Required for `class` statements: a class body evaluates `__module__ = __name__`, so
+        # without this every class definition dies with "name '__name__' is not defined".
+        # An inert placeholder, not a real module name -- nothing can be looked up from it.
+        '__name__': 'strategy',
         'random': random_provider,
         'math': math,
         'randint': random_provider.randint if seed is not None else random.randint,
