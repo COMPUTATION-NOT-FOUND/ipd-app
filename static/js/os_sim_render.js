@@ -74,7 +74,10 @@ function simBaselineEntry(sim, profile) {
     return Object.assign({ label: 'Baseline · plain ' + schedLabel, isBaseline: true }, osPickMetrics(src));
 }
 
-const OS_BASELINE_COLOR = '#9ca3af';
+// Theme colors are read at render time via srToken/srPalette/srAlpha (static/js/theme.js),
+// so these are functions rather than module-level consts: a const evaluated at load time
+// would freeze whichever theme happened to be active on first paint.
+function osBaselineColor() { return srToken('--chart-baseline', '#6b6e76'); }
 
 function createSimulationComparisonChart(sim, profile) {
     simChartInstances.forEach(c => { try { c.destroy(); } catch (e) {} });
@@ -91,7 +94,7 @@ function createSimulationComparisonChart(sim, profile) {
             type: 'bar',
             data: { labels: barEntries.map(e => e.label),
                 datasets: [{ label: 'Throughput', data: barEntries.map(e => e.throughput),
-                    backgroundColor: barEntries.map(e => e.isBaseline ? OS_BASELINE_COLOR : 'rgba(59,130,246,0.6)') }] },
+                    backgroundColor: barEntries.map(e => e.isBaseline ? osBaselineColor() : srAlpha(srToken('--chart-1', '#2dd4bf'), 60)) }] },
             options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
                 plugins: { legend: { display: false } } }
         }));
@@ -102,10 +105,10 @@ function createSimulationComparisonChart(sim, profile) {
     if (scCtx) {
         const datasets = [{ label: 'mixtures / strategies',
             data: entries.map(e => ({ x: e.response, y: e.throughput, label: e.label })),
-            backgroundColor: 'rgba(16,185,129,0.7)' }];
+            backgroundColor: srAlpha(srToken('--chart-1', '#2dd4bf'), 70) }];
         if (baseline) datasets.push({ label: 'baseline', pointStyle: 'rectRot', pointRadius: 8,
             data: [{ x: baseline.response, y: baseline.throughput, label: baseline.label }],
-            backgroundColor: OS_BASELINE_COLOR });
+            backgroundColor: osBaselineColor() });
         simChartInstances.push(new Chart(scCtx, {
             type: 'scatter', data: { datasets },
             options: { responsive: true, maintainAspectRatio: false,
@@ -123,7 +126,7 @@ function createSimulationComparisonChart(sim, profile) {
         type: 'scatter',
         data: { datasets: [{ label: 'strategies',
             data: entries.map(e => ({ x: e.throughput, y: e.coop, label: e.label })),
-            backgroundColor: '#3b82f6' }] },
+            backgroundColor: srToken('--chart-1', '#2dd4bf') }] },
         options: { responsive: true, maintainAspectRatio: false,
             scales: { x: { title: { display: true, text: 'Throughput (higher better)' } },
                       y: { min: 0, max: 100, title: { display: true, text: 'Cooperation %' } } },
@@ -141,14 +144,14 @@ function createSimulationComparisonChart(sim, profile) {
         axes.forEach(k => { const vals = scaleSet.map(e => e[k]); norm[k] = { min: Math.min(...vals), max: Math.max(...vals) }; });
         const scale = (k, v) => { const { min, max } = norm[k]; if (max === min) return 0.5;
             const t = (v - min) / (max - min); return k === 'throughput' ? t : 1 - t; };
-        const palette = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+        const palette = srPalette();
         const top = entries.slice(0, 5);
         const datasets = top.map((e, i) => ({ label: e.label,
             data: axes.map(k => scale(k, e[k])),
             borderColor: palette[i % palette.length],
-            backgroundColor: palette[i % palette.length] + '22' }));
+            backgroundColor: srAlpha(palette[i % palette.length], 13) }));
         if (baseline) datasets.push({ label: baseline.label, data: axes.map(k => scale(k, baseline[k])),
-            borderColor: OS_BASELINE_COLOR, borderDash: [5, 4], backgroundColor: 'transparent' });
+            borderColor: osBaselineColor(), borderDash: [5, 4], backgroundColor: 'transparent' });
         simChartInstances.push(new Chart(rdCtx, {
             type: 'radar',
             data: { labels: ['Throughput', 'Wait', 'Turnaround', 'Response', 'Cache'], datasets },
@@ -158,7 +161,7 @@ function createSimulationComparisonChart(sim, profile) {
     }
 }
 
-const OS_GANTT_PALETTE = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'];
+function osGanttPalette() { return srPalette(); }
 const OS_GANTT_CELL = 4;  // px per tick
 
 // Draw one trace's mini-Gantt (rows = cores, columns = ticks; filled = busy) into `el`,
@@ -175,7 +178,7 @@ function drawSimGantt(el, trace) {
     // Legend: color ↔ core personality.
     let legend = '<div style="display:flex; flex-wrap:wrap; gap:12px; margin-bottom:8px; font-size:0.82em;">';
     for (let c = 0; c < nCores; c++) {
-        const color = OS_GANTT_PALETTE[c % OS_GANTT_PALETTE.length];
+        const color = osGanttPalette()[c % 8];
         legend += `<span style="display:inline-flex; align-items:center; gap:5px;">
             <span style="display:inline-block; width:11px; height:11px; background:${color}; border-radius:2px;"></span>
             Core ${c}: ${osSimEsc(cores[c] || ('Core ' + c))}</span>`;
@@ -185,7 +188,7 @@ function drawSimGantt(el, trace) {
 
     let html = legend + '<div style="overflow-x:auto;">';
     for (let core = 0; core < nCores; core++) {
-        const color = OS_GANTT_PALETTE[core % OS_GANTT_PALETTE.length];
+        const color = osGanttPalette()[core % 8];
         let row = `<div style="display:flex; align-items:center; margin-bottom:3px;">
             <div style="width:140px; flex:none; font-size:0.8em; color:var(--text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${osSimEsc(cores[core] || ('Core ' + core))}">
                 <span style="display:inline-block; width:10px; height:10px; background:${color}; border-radius:2px; margin-right:5px;"></span>${osSimEsc(cores[core] || ('Core ' + core))}
@@ -412,3 +415,40 @@ function renderOSSimulation(container, sim, opts) {
         if (layoutSel) layoutSel.addEventListener('change', () => drawTimeline(currentProfile));
     }, 50);
 }
+
+
+/* --------------------------------------------------------------------------
+ * Redraw on theme switch. Same reasoning as pd_results_render.js: replay the
+ * last draw rather than patch baked-in colors. The Gantt matters as much as the
+ * charts here, because its busy cells carry a resolved palette color inline
+ * (its idle cells use var(--bg-card) and follow the theme on their own).
+ * ------------------------------------------------------------------------ */
+
+let osLastSimChartArgs = null;
+const createSimulationComparisonChartInner = createSimulationComparisonChart;
+
+createSimulationComparisonChart = function (sim, profile) {
+    osLastSimChartArgs = [sim, profile];
+    return createSimulationComparisonChartInner(sim, profile);
+};
+
+const osLastGanttArgs = new Map();
+const drawSimGanttInner = drawSimGantt;
+
+drawSimGantt = function (el, trace) {
+    if (el) osLastGanttArgs.set(el, trace);
+    return drawSimGanttInner(el, trace);
+};
+
+document.addEventListener('themechange', function () {
+    if (osLastSimChartArgs) {
+        try { createSimulationComparisonChartInner.apply(null, osLastSimChartArgs); } catch (e) {}
+    }
+    osLastGanttArgs.forEach(function (trace, el) {
+        if (!el.isConnected) {
+            osLastGanttArgs.delete(el);
+            return;
+        }
+        try { drawSimGanttInner(el, trace); } catch (e) {}
+    });
+});

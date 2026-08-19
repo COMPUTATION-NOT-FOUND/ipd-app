@@ -22,7 +22,10 @@ function pdEsc(unsafe) {
 // Chart.js instances tracked per container element. Keyed by container so the 1v1 and N-Player
 // result panels (which reuse the same canvas IDs) don't destroy or collide with each other.
 const pdChartInstancesByContainer = new WeakMap();
-const PD_PALETTE = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'];
+// Chart colors come from srToken/srPalette/srAlpha in static/js/theme.js, which navbar.html
+// loads on every page before this file. Reading the theme's CSS custom properties instead of
+// hardcoding hex means a light/dark switch recolors the charts; see the themechange listener
+// at the bottom of this file for what happens to charts already on screen when it flips.
 
 // Compute the per-strategy weighted-score breakdown from the stored leaderboard, mirroring the
 // formula used on the results page (win_rate*Wwin + cooperation*Wcoop + points*Wpoints) * 100.
@@ -73,7 +76,13 @@ function pdBuildH2H(el, names, matches) {
         cell[a + '|' + b] = ra;
         cell[b + '|' + a] = rb;
     });
-    const colour = { W: 'rgba(16,185,129,0.55)', L: 'rgba(239,68,68,0.45)', D: 'rgba(148,163,184,0.35)' };
+    // Win / loss / draw tints, from the theme rather than fixed rgba: the old emerald and
+    // red read as neon on light paper, and the slate draw tint went invisible on dark.
+    const colour = {
+        W: srAlpha(srToken('--color-success', '#4ade80'), 45),
+        L: srAlpha(srToken('--color-danger', '#fb7185'), 38),
+        D: srAlpha(srToken('--color-ink-faint', '#6b6e76'), 28),
+    };
     let html = '<table class="leaderboard-table" style="font-size:0.85em;"><thead><tr><th></th>';
     names.forEach(n => { html += `<th title="${pdEsc(n)}" style="max-width:90px; overflow:hidden; text-overflow:ellipsis;">${pdEsc(n)}</th>`; });
     html += '</tr></thead><tbody>';
@@ -106,7 +115,7 @@ function pdDrawCharts(container, scored, modes, matches) {
         type: 'bar',
         data: { labels: scored.map(e => e.name),
             datasets: [{ label: 'Weighted Score', data: scored.map(e => e.weightedScore),
-                backgroundColor: 'rgba(59,130,246,0.6)' }] },
+                backgroundColor: srAlpha(srToken('--chart-1', '#2dd4bf'), 60) }] },
         options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
             plugins: { legend: { display: false } } }
     }));
@@ -117,7 +126,7 @@ function pdDrawCharts(container, scored, modes, matches) {
         type: 'scatter',
         data: { datasets: [{ label: 'strategies',
             data: scored.map(e => ({ x: e.avgPPR, y: e.coopPct, label: e.name })),
-            backgroundColor: '#3b82f6' }] },
+            backgroundColor: srToken('--chart-1', '#2dd4bf') }] },
         options: { responsive: true, maintainAspectRatio: false,
             scales: { x: { title: { display: true, text: 'Avg Points (higher better)' } },
                       y: { min: 0, max: 100, title: { display: true, text: 'Cooperation %' } } },
@@ -134,8 +143,8 @@ function pdDrawCharts(container, scored, modes, matches) {
             data: { labels: ['Win rate', 'Points', 'Cooperation'],
                 datasets: top.map((e, i) => ({ label: e.name,
                     data: [e.winRateScore, e.pointsScore, e.coopScore],
-                    borderColor: PD_PALETTE[i % PD_PALETTE.length],
-                    backgroundColor: PD_PALETTE[i % PD_PALETTE.length] + '22' })) },
+                    borderColor: srPalette()[i % 8],
+                    backgroundColor: srAlpha(srPalette()[i % 8], 13) })) },
             options: { responsive: true, maintainAspectRatio: false,
                 scales: { r: { min: 0, max: 1, ticks: { display: false } } } }
         }));
@@ -150,7 +159,7 @@ function pdDrawCharts(container, scored, modes, matches) {
             data: { labels: top.map(e => e.name),
                 datasets: modes.map((m, i) => ({ label: m.charAt(0).toUpperCase() + m.slice(1),
                     data: top.map(e => (e.mode_points && e.mode_points[m]) || 0),
-                    backgroundColor: PD_PALETTE[i % PD_PALETTE.length] })) },
+                    backgroundColor: srPalette()[i % 8] })) },
             options: { responsive: true, maintainAspectRatio: false,
                 scales: { y: { title: { display: true, text: 'Avg points / round' } } } }
         }));
@@ -184,3 +193,35 @@ function renderPDResults(container, tournament) {
 
     setTimeout(() => pdDrawCharts(container, scored, modes, matches), 30);
 }
+
+
+/* --------------------------------------------------------------------------
+ * Redraw on theme switch.
+ *
+ * Chart.js bakes resolved colors into each dataset at construction, so a chart
+ * already on screen when the user flips the theme keeps the old palette. Rather
+ * than walk every dataset and patch colors in place (which would have to know
+ * the shape of each chart type), the last call into the draw function is
+ * recorded and simply replayed: pdDrawCharts already destroys the previous
+ * instances for its container, so replaying is idempotent.
+ * ------------------------------------------------------------------------ */
+
+const pdLastDrawArgs = new Map();
+const pdDrawChartsInner = pdDrawCharts;
+
+pdDrawCharts = function (container, scored, modes, matches) {
+    if (container) pdLastDrawArgs.set(container, [container, scored, modes, matches]);
+    return pdDrawChartsInner(container, scored, modes, matches);
+};
+
+document.addEventListener('themechange', function () {
+    pdLastDrawArgs.forEach(function (args, container) {
+        // Panels can be torn out of the DOM between renders; skip those rather
+        // than drawing into a detached container.
+        if (!container.isConnected) {
+            pdLastDrawArgs.delete(container);
+            return;
+        }
+        try { pdDrawChartsInner.apply(null, args); } catch (e) {}
+    });
+});

@@ -16,12 +16,12 @@
         .hub-item {
             display: flex; justify-content: space-between; align-items: center;
             padding: 10px 12px; border: 1px solid var(--border-color);
-            border-radius: 6px; margin-bottom: 8px; gap: 10px;
+            border-radius: var(--radius-sm); margin-bottom: 8px; gap: 10px;
         }
         .hub-item .meta { font-family: var(--font-mono); font-size: 0.85rem; opacity: 0.8; }
-        .hub-msg { padding: 10px 12px; border-radius: 6px; margin: 16px 0 0; display: none; }
-        .hub-msg.ok { background: rgba(40,167,69,0.15); border: 1px solid var(--success-color); }
-        .hub-msg.err { background: rgba(220,53,69,0.15); border: 1px solid var(--danger-color); }
+        .hub-msg { padding: 10px 12px; border-radius: var(--radius-sm); margin: 16px 0 0; display: none; }
+        .hub-msg.ok { background: color-mix(in srgb, var(--color-success) 15%, transparent); border: 1px solid var(--success-color); }
+        .hub-msg.err { background: color-mix(in srgb, var(--color-danger) 15%, transparent); border: 1px solid var(--danger-color); }
         .hub-field { display: block; width: 100%; margin-bottom: 12px; }
         textarea.hub-field { min-height: 150px; font-family: var(--font-mono); }
         /* Buttons get a little gap so stacked/adjacent ones don't touch. */
@@ -32,10 +32,10 @@
         .hub-subtabs { display: flex; gap: 6px; margin: 4px 0 14px; flex-wrap: wrap; }
         .hub-subtab {
             background: transparent; color: var(--text-secondary);
-            border: 1px solid var(--border-color); border-radius: 6px;
+            border: 1px solid var(--border-color); border-radius: var(--radius-sm);
             padding: 6px 14px; cursor: pointer; font-size: 0.9rem;
         }
-        .hub-subtab.active { background: var(--primary-color); color: #fff; border-color: var(--primary-color); }
+        .hub-subtab.active { background: var(--primary-color); color: var(--color-paper); border-color: var(--primary-color); }
     </style>
 </head>
 <body>

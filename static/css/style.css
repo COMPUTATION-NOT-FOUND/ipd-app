@@ -1,179 +1,388 @@
+/* ============================================================================
+   Systems Research @ IBA -- "Signal on Paper"
+   ----------------------------------------------------------------------------
+   Ported from the group site (systems-resarch-at-iba/site, app/globals.css +
+   lib/themes.ts), which is Next.js + Tailwind v4. Tailwind's @theme block
+   compiles to plain CSS custom properties, so the token values below are the
+   same ones the site ships; only the delivery mechanism differs.
+
+   Dark is the default here (the site defaults to light, but this app is a code
+   editor first and students run it for hours). `data-theme="light"` on <html>
+   switches; static/js/theme.js stamps it before first paint.
+
+   The LEGACY ALIASES block near the bottom of :root is load-bearing: the
+   templates carry ~1000 inline `style="..."` attributes that reference the old
+   variable names (--bg-dark, --primary-color, ...). Aliasing those onto the new
+   tokens recolors every one of them without editing the HTML.
+   ========================================================================= */
+
 :root {
-    --bg-dark: #0f172a;
-    --bg-card: #1e293b;
-    --bg-hover: #334155;
-    --text-primary: #f1f5f9;
-    --text-secondary: #94a3b8;
-    --border-color: #334155;
-    
-    /* Desaturated Colors */
-    --primary-color: #3b82f6; /* Blue */
-    --primary-hover: #2563eb;
-    --primary-muted: #60a5fa;
-    
-    --success-color: #10b981; /* Green */
-    --success-hover: #059669;
-    --success-muted: #34d399;
-    
-    --danger-color: #ef4444; /* Red */
-    --danger-hover: #dc2626;
-    --danger-muted: #f87171;
-    
-    --warning-color: #f59e0b; /* Amber */
-    --warning-hover: #d97706;
-    
-    --info-color: #06b6d4; /* Cyan */
-    
-    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.5), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
+    color-scheme: dark;
+
+    /* --- Surfaces & text: dark-teal, from lib/themes.ts DARK_BASE --- */
+    --color-paper: #101114;
+    --color-paper-raised: #1a1b20;
+    /* Third surface. The site has no equivalent because it never needs one, but
+       this UI uses a genuinely distinct sunken tone for table headers, inactive
+       tabs, <summary> bars and the export strip; collapsing it onto --color-
+       hairline flattens all four. */
+    --color-paper-sunken: #23252c;
+    --color-ink: #f2f2f0;
+    --color-ink-muted: #a3a6ad;
+    --color-ink-faint: #6b6e76;
+    --color-hairline: #2a2c33;
+    --color-hairline-strong: #3a3d46;
+
+    /* --- Accent --- */
+    --color-signal: #2dd4bf;
+    --color-signal-dim: #042f2e;
+    --color-signal-ink: #14b8a6;
+
+    /* --- Semantic set ---
+       Kept distinct from signal because C-vs-D and error-vs-success have to
+       stay readable next to the accent. Pitched in the same register signal
+       sits in (Tailwind's 400 step on dark, 600 on light) so they read as one
+       family rather than four unrelated hues. */
+    --color-success: #4ade80;
+    --color-danger: #fb7185;
+    --color-warning: #fbbf24;
+    --color-info: #38bdf8;
+
+    /* --- Chart series. Signal leads; read at render time by the JS. --- */
+    --chart-1: #2dd4bf;
+    --chart-2: #4ade80;
+    --chart-3: #fbbf24;
+    --chart-4: #fb7185;
+    --chart-5: #a78bfa;
+    --chart-6: #38bdf8;
+    --chart-7: #f472b6;
+    --chart-8: #fb923c;
+    --chart-baseline: #6b6e76;
+
+    /* --- Aurora glow behind the page (site: app/globals.css body). --- */
+    --aurora-1: hsl(172.5 75% 62% / 0.320);
+    --aurora-2: hsl(140.5 75% 62% / 0.272);
+    --aurora-3: hsl(204.5 75% 62% / 0.272);
+
+    /* --- Geometry, shadow, type --- */
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --shadow-float: 0 8px 24px rgb(0 0 0 / 0.35);
+    --shadow-nav: 0 8px 28px rgb(0 0 0 / 0.40), 0 2px 8px rgb(0 0 0 / 0.30);
+
+    --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+    --font-serif: 'Source Serif 4', 'Source Serif Pro', Georgia, serif;
+    --font-display: 'Bricolage Grotesque', system-ui, -apple-system, sans-serif;
     --font-mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+
+    /* ---------------------------------------------------------------------
+       LEGACY ALIASES. Every inline style in the templates reads these.
+       --------------------------------------------------------------------- */
+    --bg-dark: var(--color-paper);
+    --bg-card: var(--color-paper-raised);
+    --bg-hover: var(--color-paper-sunken);
+    --text-primary: var(--color-ink);
+    --text-secondary: var(--color-ink-muted);
+    --border-color: var(--color-hairline);
+
+    --primary-color: var(--color-signal);
+    --primary-hover: var(--color-signal-ink);
+    --primary-muted: var(--color-signal);
+
+    --success-color: var(--color-success);
+    --success-hover: var(--color-success);
+    --success-muted: var(--color-success);
+
+    --danger-color: var(--color-danger);
+    --danger-hover: var(--color-danger);
+    --danger-muted: var(--color-danger);
+
+    --warning-color: var(--color-warning);
+    --warning-hover: var(--color-warning);
+
+    --info-color: var(--color-info);
+
+    /* Three names a handful of templates reference that the previous stylesheet
+       never actually defined, so they silently fell back to inherited color:
+       "Error loading schedule" rendered as ordinary body text rather than red
+       (ipd-hub results.html / admin.html), and the login page's icon and the
+       pending-approval callout lost their surface. Defined here rather than
+       edited out of the templates, which is the same reason the rest of this
+       block exists. */
+    --error-color: var(--color-danger);
+    --accent-color: var(--color-signal);
+    --bg-secondary: var(--color-paper-sunken);
+
+    --shadow-md: var(--shadow-float);
 }
+
+/* Light-teal (site LIGHT_BASE). Only the tokens change; every alias above is
+   declared with var(), so it re-resolves automatically. */
+:root[data-theme='light'] {
+    color-scheme: light;
+
+    --color-paper: #fafaf9;
+    --color-paper-raised: #ffffff;
+    --color-paper-sunken: #f1f1ef;
+    --color-ink: #15161b;
+    --color-ink-muted: #5b5e68;
+    --color-ink-faint: #9498a2;
+    --color-hairline: #e7e7e3;
+    --color-hairline-strong: #d4d4ce;
+
+    --color-signal: #0d9488;
+    --color-signal-dim: #f0fdfa;
+    --color-signal-ink: #0f766e;
+
+    --color-success: #16a34a;
+    --color-danger: #e11d48;
+    --color-warning: #d97706;
+    --color-info: #0284c7;
+
+    --chart-1: #0d9488;
+    --chart-2: #16a34a;
+    --chart-3: #d97706;
+    --chart-4: #e11d48;
+    --chart-5: #7c3aed;
+    --chart-6: #0284c7;
+    --chart-7: #db2777;
+    --chart-8: #ea580c;
+    --chart-baseline: #9498a2;
+
+    --aurora-1: hsl(174.7 72% 52% / 0.340);
+    --aurora-2: hsl(142.7 72% 52% / 0.289);
+    --aurora-3: hsl(206.7 72% 52% / 0.289);
+
+    --shadow-float: 0 8px 24px rgb(21 22 27 / 0.14);
+    --shadow-nav: 0 8px 28px rgb(21 22 27 / 0.18), 0 2px 8px rgb(21 22 27 / 0.1);
+}
+
+/* ============================================================================
+   Base
+   ========================================================================= */
 
 body {
-    background-color: var(--bg-dark);
-    color: var(--text-primary);
-    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-}
-
-/* Common Components */
-.card, .strategy, .user-info, .admin-section, .tournament-card, .results-section, .info-box, .login-container {
-    background-color: var(--bg-card) !important;
-    border: 1px solid var(--border-color) !important;
-    box-shadow: var(--shadow-md);
-    color: var(--text-primary);
-    border-radius: 10px;
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    margin: 0;
+    /* Aurora glow near the top, same three gradients the site paints on body so
+       every route gets it without a per-page wrapper. */
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+    background-image:
+        radial-gradient(circle at 8% -5%, var(--aurora-1), transparent 32%),
+        radial-gradient(circle at 45% -8%, var(--aurora-2), transparent 30%),
+        radial-gradient(circle at 82% 0%, var(--aurora-3), transparent 28%);
 }
 
 h1, h2, h3, h4, h5, h6 {
-    color: var(--text-primary) !important;
+    font-family: var(--font-display);
+    color: var(--color-ink) !important;
+    letter-spacing: -0.02em;
+    line-height: 1.15;
 }
 
-/* Shared "How it works" explainer (_game_info.html): self-contained spacing so it
-   renders identically on the practice and results pages regardless of page context.
-   The padding/margin live here (not on a page's .strategy rule) so the card content
-   never sits flush against its border on pages that don't style .strategy. */
-.game-info { line-height: 1.55; padding: 16px 20px; margin: 15px 0; }
-.game-info p { margin: 0 0 10px 0; }
-.game-info ul { margin: 0 0 12px 18px; }
-.game-info li { margin-bottom: 5px; }
-.game-info h3 { margin: 0 0 12px 0; }
+h1 { font-size: clamp(32px, 5.5vw, 56px); font-weight: 700; }
+h2 { font-size: clamp(24px, 4vw, 36px); font-weight: 600; }
+h3 { font-size: clamp(18px, 2.5vw, 22px); font-weight: 600; }
+h4, h5, h6 { font-size: 1rem; font-weight: 600; }
 
 a {
-    color: var(--primary-muted);
+    color: var(--color-signal);
     text-decoration: none;
+    transition: color 0.15s ease;
 }
 
 a:hover {
-    color: var(--primary-color);
+    color: var(--color-signal-ink);
     text-decoration: underline;
+    text-underline-offset: 2px;
 }
 
-/* Form Elements */
+/* Single focus treatment everywhere, matching the site's ring. */
+:focus-visible {
+    outline: 2px solid var(--color-signal);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+}
+
+/* ============================================================================
+   Surfaces
+   ========================================================================= */
+
+.card, .strategy, .user-info, .admin-section, .tournament-card,
+.results-section, .info-box, .login-container {
+    background-color: var(--color-paper-raised) !important;
+    border: 1px solid var(--color-hairline) !important;
+    color: var(--color-ink);
+    border-radius: var(--radius-md);
+    /* No shadow at rest. The site distinguishes cards with a hairline and lets
+       the border strengthen on hover, rather than floating them. */
+    box-shadow: none;
+    transition: border-color 0.2s ease;
+}
+
+.card:hover, .strategy:hover, .tournament-card:hover {
+    border-color: var(--color-hairline-strong) !important;
+}
+
+/* Shared "How it works" explainer (_game_info.html): self-contained spacing so
+   it renders identically on the practice and results pages regardless of page
+   context. The padding/margin live here (not on a page's .strategy rule) so the
+   card content never sits flush against its border on pages that don't style
+   .strategy. Body copy is set in the serif the blog uses, which is what makes
+   the explainer read as prose rather than as UI chrome. */
+.game-info { line-height: 1.6; padding: 20px 24px; margin: 15px 0; }
+.game-info p,
+.game-info li {
+    font-family: var(--font-serif);
+    font-size: clamp(15px, 1.4vw, 17px);
+    color: var(--color-ink);
+}
+.game-info p { margin: 0 0 12px 0; }
+.game-info ul { margin: 0 0 12px 18px; }
+.game-info li { margin-bottom: 6px; }
+.game-info h3 { margin: 0 0 14px 0; }
+
+/* ============================================================================
+   Forms
+   ========================================================================= */
+
 input, select, textarea {
-    background-color: var(--bg-dark);
-    border: 1px solid var(--border-color);
-    color: var(--text-primary);
+    background-color: var(--color-paper);
+    border: 1px solid var(--color-hairline);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 0.9rem;
     padding: 10px 14px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     width: 100%;
     box-sizing: border-box;
-    transition: border-color 0.2s;
+    transition: border-color 0.15s ease;
+}
+
+input:hover, select:hover, textarea:hover {
+    border-color: var(--color-hairline-strong);
 }
 
 input:focus, select:focus, textarea:focus {
     outline: none;
-    border-color: var(--primary-color);
-    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+    border-color: var(--color-signal);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-signal) 22%, transparent);
 }
 
-/* Ensure numeric spinners are visible in dark mode */
-input[type=number]::-webkit-inner-spin-button, 
-input[type=number]::-webkit-outer-spin-button { 
-    filter: invert(1);
+/* Numeric spinners are drawn by the UA in its own color scheme; color-scheme on
+   :root already flips them, so the old blanket invert() is gone (it inverted
+   them wrongly in light mode). */
+
+/* Checkboxes, radios and range thumbs are painted by the UA; accent-color is the
+   only hook for them short of rebuilding each control. */
+input[type='checkbox'], input[type='radio'], input[type='range'] {
+    accent-color: var(--color-signal);
 }
 
 label {
     display: block;
     margin-bottom: 8px;
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
+    font-family: var(--font-sans);
     font-weight: 500;
+    font-size: 0.875rem;
 }
 
-/* Buttons */
+/* ============================================================================
+   Buttons
+   ----------------------------------------------------------------------------
+   Sentence case, Inter medium, 6px radius, color transition only. The old
+   uppercase + letter-spacing + translateY(-1px) lift is gone: the site's
+   buttons don't shout and don't move.
+   ========================================================================= */
+
 button, .btn {
-    font-weight: 600;
-    transition: all 0.2s ease;
-    border-radius: 6px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    font-size: 0.85rem !important;
-    padding: 10px 20px;
+    font-family: var(--font-sans);
+    font-weight: 500;
+    font-size: 0.875rem !important;
+    letter-spacing: 0;
+    text-transform: none;
+    transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+    border-radius: var(--radius-sm);
+    padding: 9px 16px;
     border: 1px solid transparent;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 8px;
-}
-
-button:hover, .btn:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    background-color: var(--color-paper-sunken);
+    color: var(--color-ink);
 }
 
 button:disabled, .btn:disabled {
-    opacity: 0.6;
+    opacity: 0.5;
     cursor: not-allowed;
-    transform: none !important;
 }
 
-/* Button Variants */
+/* Primary: solid signal (site ui/button.tsx `primary`). */
 .btn-primary {
-    background-color: var(--bg-hover);
-    color: var(--primary-muted);
-    border-color: var(--primary-color);
+    background-color: var(--color-signal);
+    color: var(--color-paper);
+    border-color: var(--color-signal);
 }
 
-.btn-primary:hover {
-    background-color: var(--primary-color);
-    color: white;
+.btn-primary:hover:not(:disabled) {
+    background-color: var(--color-signal-ink);
+    border-color: var(--color-signal-ink);
+    color: var(--color-paper);
 }
 
-.btn-success {
-    background-color: var(--bg-hover);
-    color: var(--success-muted);
-    border-color: var(--success-color);
+/* Secondary: tinted signal fill (site `secondary`). Used for the affirmative
+   actions that aren't the page's single primary action. */
+.btn-success, .btn-secondary, .btn-export {
+    background-color: var(--color-signal-dim);
+    color: var(--color-signal-ink);
+    border-color: color-mix(in srgb, var(--color-signal) 35%, transparent);
 }
 
-.btn-success:hover {
-    background-color: var(--success-color);
-    color: white;
+.btn-success:hover:not(:disabled),
+.btn-secondary:hover:not(:disabled),
+.btn-export:hover:not(:disabled) {
+    background-color: var(--color-signal);
+    color: var(--color-paper);
+    border-color: var(--color-signal);
 }
 
+/* Destructive / cautionary: ghost shape, semantic color (site `ghost`). */
 .btn-danger {
-    background-color: var(--bg-hover);
-    color: var(--danger-muted);
-    border-color: var(--danger-color);
+    background-color: transparent;
+    color: var(--color-danger);
+    border-color: color-mix(in srgb, var(--color-danger) 45%, transparent);
 }
 
-.btn-danger:hover {
-    background-color: var(--danger-color);
-    color: white;
+.btn-danger:hover:not(:disabled) {
+    background-color: var(--color-danger);
+    color: var(--color-paper);
+    border-color: var(--color-danger);
 }
 
 .btn-warning {
-    background-color: var(--bg-hover);
-    color: var(--warning-color);
-    border-color: var(--warning-color);
+    background-color: transparent;
+    color: var(--color-warning);
+    border-color: color-mix(in srgb, var(--color-warning) 45%, transparent);
 }
 
-.btn-warning:hover {
-    background-color: var(--warning-hover);
-    color: white;
+.btn-warning:hover:not(:disabled) {
+    background-color: var(--color-warning);
+    color: var(--color-paper);
+    border-color: var(--color-warning);
 }
 
-/* Login Specific */
+/* ============================================================================
+   Login
+   ========================================================================= */
+
 .login-container {
-    max-width: 400px;
+    max-width: 420px;
     margin: 60px auto;
     padding: 40px;
 }
@@ -182,136 +391,259 @@ button:disabled, .btn:disabled {
     width: 100%;
     margin-top: 20px;
     padding: 12px;
-    font-size: 1rem !important;
-    background-color: var(--primary-color);
-    color: white;
+    font-size: 0.95rem !important;
+    background-color: var(--color-signal);
+    color: var(--color-paper);
+    border-color: var(--color-signal);
 }
 
-.login-btn:hover {
-    background-color: var(--primary-hover);
+.login-btn:hover:not(:disabled) {
+    background-color: var(--color-signal-ink);
+    border-color: var(--color-signal-ink);
 }
 
 .resend-btn {
     background-color: transparent;
-    border: 1px solid var(--warning-color);
-    color: var(--warning-color);
+    border: 1px solid color-mix(in srgb, var(--color-warning) 45%, transparent);
+    color: var(--color-warning);
     padding: 6px 12px;
 }
 
 .resend-btn:hover:not(:disabled) {
-    background-color: var(--warning-color);
-    color: white;
+    background-color: var(--color-warning);
+    color: var(--color-paper);
 }
 
-/* Alerts and Messages */
+/* ============================================================================
+   Alerts
+   ========================================================================= */
+
 .error-message, .success-message, .spam-warning {
-    padding: 12px;
-    border-radius: 6px;
+    padding: 12px 14px;
+    border-radius: var(--radius-sm);
     margin-bottom: 20px;
     text-align: center;
-    font-size: 0.9rem;
+    font-family: var(--font-sans);
+    font-size: 0.875rem;
     border: 1px solid transparent;
 }
 
 .error-message {
-    background-color: rgba(239, 68, 68, 0.1);
-    color: var(--danger-muted);
-    border-color: rgba(239, 68, 68, 0.2);
+    background-color: color-mix(in srgb, var(--color-danger) 12%, transparent);
+    color: var(--color-danger);
+    border-color: color-mix(in srgb, var(--color-danger) 30%, transparent);
 }
 
 .success-message {
-    background-color: rgba(16, 185, 129, 0.1);
-    color: var(--success-muted);
-    border-color: rgba(16, 185, 129, 0.2);
+    background-color: var(--color-signal-dim);
+    color: var(--color-signal-ink);
+    border-color: color-mix(in srgb, var(--color-signal) 30%, transparent);
 }
 
 .spam-warning {
-    background-color: rgba(245, 158, 11, 0.1);
-    color: var(--warning-color);
-    border-color: rgba(245, 158, 11, 0.2);
+    background-color: color-mix(in srgb, var(--color-warning) 12%, transparent);
+    color: var(--color-warning);
+    border-color: color-mix(in srgb, var(--color-warning) 30%, transparent);
     margin-top: 20px;
 }
 
-/* Tables */
+/* ============================================================================
+   Tables
+   ========================================================================= */
+
 table {
-    border-color: var(--border-color);
+    border-color: var(--color-hairline);
     width: 100%;
     border-collapse: collapse;
+    font-family: var(--font-sans);
 }
 
+/* Column headers as small-caps metadata, matching the site's card meta row
+   (font-sans, uppercase, wide tracking, faint ink). */
 th {
-    background-color: var(--bg-hover) !important;
-    color: var(--text-primary) !important;
-    border-color: var(--border-color) !important;
-    padding: 12px;
+    background-color: var(--color-paper-sunken) !important;
+    color: var(--color-ink-faint) !important;
+    border-color: var(--color-hairline) !important;
+    padding: 10px 12px;
     text-align: left;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
 }
 
 td {
-    border-color: var(--border-color) !important;
-    color: var(--text-secondary);
+    border-color: var(--color-hairline) !important;
+    color: var(--color-ink-muted);
     padding: 12px;
+    font-size: 0.9rem;
 }
 
 tr:hover td {
-    background-color: rgba(255, 255, 255, 0.03);
-    color: var(--text-primary);
+    background-color: color-mix(in srgb, var(--color-signal) 6%, transparent);
+    color: var(--color-ink);
 }
 
-/* Navbar specific override */
-nav {
-    background: var(--bg-card) !important;
-    border-bottom: 1px solid var(--border-color);
+/* ============================================================================
+   Navigation: the site's floating pill
+   ----------------------------------------------------------------------------
+   See components/layout/navigation.tsx. Sticky and inset from the viewport
+   rather than a full-bleed bar, translucent over the aurora, with the active
+   route in signal.
+   ========================================================================= */
+
+.sr-nav-wrap {
+    position: sticky;
+    top: 12px;
+    z-index: 50;
+    display: flex;
+    justify-content: center;
+    padding: 0 16px;
+    margin-bottom: 24px;
 }
 
-nav a {
-    color: var(--text-secondary) !important;
+nav.sr-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    width: 100%;
+    max-width: 1400px;
+    padding: 8px 10px 8px 20px;
+    border-radius: 9999px;
+    background: color-mix(in srgb, var(--color-paper-raised) 72%, transparent);
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+    box-shadow: var(--shadow-nav);
+    border: 1px solid var(--color-hairline);
+}
+
+.sr-nav-brand {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: 0.9375rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--color-ink) !important;
+    white-space: nowrap;
+    transition: color 0.15s ease;
+}
+
+.sr-nav-brand:hover { color: var(--color-signal) !important; }
+
+.sr-nav-links {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+nav.sr-nav a.sr-nav-link {
+    font-family: var(--font-sans);
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--color-ink-muted) !important;
     background: transparent !important;
+    text-decoration: none;
+    padding: 8px 12px;
+    border-radius: 9999px;
+    white-space: nowrap;
+    transition: color 0.15s ease, background-color 0.15s ease;
 }
 
-nav a:hover {
-    color: var(--text-primary) !important;
-    background: var(--bg-hover) !important;
-    transform: translateY(0) !important;
+nav.sr-nav a.sr-nav-link:hover {
+    color: var(--color-ink) !important;
+    background: color-mix(in srgb, var(--color-ink) 7%, transparent) !important;
+    text-decoration: none;
 }
 
-/* Code editors / blocks keep the dark background */
+nav.sr-nav a.sr-nav-link.is-active {
+    color: var(--color-signal) !important;
+}
+
+/* Admin and Logout keep their semantic color, still in the pill's link shape. */
+nav.sr-nav a.sr-nav-link.is-warning { color: var(--color-warning) !important; }
+nav.sr-nav a.sr-nav-link.is-danger  { color: var(--color-danger) !important; }
+
+.sr-theme-toggle {
+    flex: 0 0 auto;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border-radius: 9999px;
+    background: transparent;
+    border: 1px solid var(--color-hairline);
+    color: var(--color-ink-muted);
+    font-size: 0.8125rem !important;
+    cursor: pointer;
+}
+
+.sr-theme-toggle:hover:not(:disabled) {
+    color: var(--color-signal);
+    border-color: var(--color-signal);
+    background: transparent;
+}
+
+/* ============================================================================
+   Code
+   ========================================================================= */
+
 pre, .code-cell, textarea {
     font-family: var(--font-mono) !important;
-    background-color: #0d1117 !important;
-    color: #e6edf3 !important;
+    background-color: var(--color-paper) !important;
+    color: var(--color-ink) !important;
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-sm);
+    font-size: 0.8125rem;
+    line-height: 1.6;
 }
 
-/* Inline code reads as a soft pill, not a harsh black box */
+pre, .code-cell {
+    padding: 14px 16px;
+    overflow-x: auto;
+}
+
+/* Inline code reads as a soft pill, not a harsh black box. */
 code {
     font-family: var(--font-mono) !important;
-    background-color: rgba(148, 163, 184, 0.15);
-    color: var(--primary-muted);
-    padding: 2px 6px;
+    background-color: var(--color-paper-raised);
+    border: 1px solid var(--color-hairline);
+    color: var(--color-signal);
+    padding: 1px 6px;
     border-radius: 4px;
-    font-size: 0.9em;
+    font-size: 0.85em;
 }
 
-/* But inline code inside a code editor/block inherits the block look */
+/* But inline code inside a code editor/block inherits the block look. */
 pre code, textarea code, .code-cell code {
     background-color: transparent;
+    border: none;
     color: inherit;
     padding: 0;
 }
 
-/* Match & Strategy items */
+/* ============================================================================
+   Match & strategy items
+   ========================================================================= */
+
 .match, .strategy-box {
-    background-color: var(--bg-dark) !important;
-    border: 1px solid var(--border-color) !important;
-    color: var(--text-secondary);
+    background-color: var(--color-paper) !important;
+    border: 1px solid var(--color-hairline) !important;
+    color: var(--color-ink-muted);
+    border-radius: var(--radius-sm);
+    transition: border-color 0.15s ease, background-color 0.15s ease;
 }
 
 .match:hover {
-    background-color: var(--bg-hover) !important;
-    border-color: var(--primary-color) !important;
+    background-color: var(--color-paper-sunken) !important;
+    border-color: var(--color-signal) !important;
 }
 
-/* Modal */
+/* ============================================================================
+   Modal
+   ========================================================================= */
+
 .modal {
     display: none;
     position: fixed;
@@ -320,37 +652,60 @@ pre code, textarea code, .code-cell code {
     top: 0;
     width: 100%;
     height: 100%;
-    background-color: rgba(0, 0, 0, 0.8);
-    backdrop-filter: blur(4px);
+    background-color: color-mix(in srgb, var(--color-paper) 78%, transparent);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
     overflow: auto;
 }
 
 .modal-content {
-    background-color: var(--bg-card) !important;
-    border: 1px solid var(--border-color);
-    color: var(--text-primary);
+    background-color: var(--color-paper-raised) !important;
+    border: 1px solid var(--color-hairline);
+    color: var(--color-ink);
     margin: 5% auto;
-    padding: 20px;
-    border-radius: 10px;
+    padding: 24px;
+    border-radius: var(--radius-md);
     width: 90%;
     max-width: 800px;
     max-height: 80vh;
     overflow-y: auto;
+    box-shadow: var(--shadow-float);
 }
 
 .close {
-    color: var(--text-secondary) !important;
+    color: var(--color-ink-faint) !important;
+    transition: color 0.15s ease;
 }
 
-.close:hover {
-    color: var(--danger-color) !important;
-}
+.close:hover { color: var(--color-danger) !important; }
+
+/* ============================================================================
+   Metadata type
+   ========================================================================= */
 
 .text-muted, small, .meta-label {
-    color: var(--text-secondary) !important;
+    color: var(--color-ink-faint) !important;
+    font-family: var(--font-sans);
 }
 
-/* Responsive table wrapper */
+.meta-label {
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+    margin-bottom: 5px;
+}
+
+.meta-value {
+    font-weight: 500;
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+}
+
+/* ============================================================================
+   Layout
+   ========================================================================= */
+
 .table-responsive {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
@@ -358,110 +713,39 @@ pre code, textarea code, .code-cell code {
     margin: 10px 0;
 }
 
-/* Layout - Desktop defaults */
 .main-content {
     margin: 40px;
     padding: 0;
 }
 
-.results-section {
-    padding: 20px;
-}
+.results-section { padding: 24px; }
 
-/* Mobile Responsive Styles */
-@media (max-width: 768px) {
-    /* Reduce padding for main content areas */
-    .main-content {
-        margin: 20px 10px !important;
-        padding: 10px !important;
-    }
-    
-    .login-container {
-        margin: 30px 15px;
-        padding: 20px;
-    }
-    
-    /* Modal adjustments for small screens */
-    .modal-content {
-        margin: 10px;
-        padding: 15px;
-        width: 95%;
-        max-height: 90vh;
-    }
-    
-    /* Ensure headings wrap */
-    h1, h2, h3 {
-        word-wrap: break-word;
-        overflow-wrap: break-word;
-    }
-    
-    /* Button wrapping */
-    button, .btn {
-        word-wrap: break-word;
-        white-space: normal;
-    }
-    
-    /* Allow navbar to wrap (classes will be added in Phase 3) */
-    nav > div {
-        flex-direction: column;
-        gap: 10px;
-    }
-    
-    nav > div > div {
-        flex-wrap: wrap;
-        justify-content: center;
-    }
-    
-    /* Strategy cards stack on mobile */
-    .player {
-        display: block !important;
-        width: 100% !important;
-        margin: 10px 0 !important;
-    }
-    
-    /* Reduce table padding on mobile */
-    th, td {
-        padding: 8px 4px !important;
-        font-size: 14px;
-    }
-    
-    /* Admin section spacing */
-    .admin-section {
-        padding: 15px !important;
-        margin-bottom: 15px !important;
-    }
-}
+/* ============================================================================
+   Tournament traceability
+   ========================================================================= */
 
-/* Tournament Traceability Styles */
 .mono-token {
     font-family: var(--font-mono);
-    font-size: 0.85em;
-    background-color: var(--bg-dark);
+    font-size: 0.8em;
+    background-color: var(--color-paper);
     padding: 2px 6px;
     border-radius: 4px;
-    border: 1px solid var(--border-color);
-    color: var(--info-color);
+    border: 1px solid var(--color-hairline);
+    color: var(--color-info);
     word-break: break-all;
 }
 
 .copy-button {
     background: none;
     border: none;
-    color: var(--primary-muted);
+    color: var(--color-signal);
     cursor: pointer;
     padding: 4px 8px;
-    font-size: 0.9em;
-    transition: color 0.2s;
+    font-size: 0.85em !important;
 }
 
-.copy-button:hover {
-    color: var(--primary-color);
-    transform: none;
-}
-
-.copy-button i {
-    margin-right: 4px;
-}
+.copy-button:hover { color: var(--color-signal-ink); background: none; }
+.copy-button i { margin-right: 4px; }
 
 .tournament-meta {
     display: grid;
@@ -470,45 +754,35 @@ pre code, textarea code, .code-cell code {
     margin: 20px 0;
 }
 
-.meta-item {
-    display: flex;
-    flex-direction: column;
-}
-
-.meta-label {
-    font-size: 0.85em;
-    color: var(--text-secondary);
-    margin-bottom: 5px;
-}
-
-.meta-value {
-    font-weight: 500;
-    color: var(--text-primary);
-}
+.meta-item { display: flex; flex-direction: column; }
 
 .collapsible-section {
     margin: 15px 0;
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-sm);
     overflow: hidden;
 }
 
 .collapsible-section summary {
-    background-color: var(--bg-hover);
+    background-color: var(--color-paper-sunken);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 0.875rem;
     padding: 10px 15px;
     cursor: pointer;
     font-weight: 600;
     user-select: none;
-    transition: background-color 0.2s;
+    transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .collapsible-section summary:hover {
-    background-color: var(--primary-color);
+    background-color: var(--color-signal-dim);
+    color: var(--color-signal-ink);
 }
 
 .collapsible-section .content {
     padding: 15px;
-    background-color: var(--bg-card);
+    background-color: var(--color-paper-raised);
 }
 
 .export-controls {
@@ -516,41 +790,97 @@ pre code, textarea code, .code-cell code {
     flex-wrap: nowrap;
     gap: 10px;
     align-items: center;
-    padding: 15px;
-    background: var(--bg-hover);
-    border-radius: 8px;
+    padding: 14px;
+    background: var(--color-paper-sunken);
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-sm);
     margin: 15px 0;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
 }
 
-.export-controls .btn {
-    white-space: nowrap;
-}
-
-.btn-export {
-    background-color: var(--bg-hover);
-    color: var(--info-color);
-    border-color: var(--info-color);
-}
-
-.btn-export:hover {
-    background-color: var(--info-color);
-    color: white;
-}
-
-/* Utility classes */
-.ml-auto {
-    margin-left: auto;
-}
+.export-controls .btn { white-space: nowrap; }
 
 .tournament-card {
-    padding: 20px;
+    padding: 24px;
     margin-bottom: 20px;
 }
 
-.tournament-card:hover {
-    border-color: var(--primary-color);
-    transform: translateY(-2px);
-    transition: all 0.2s;
+/* ============================================================================
+   Scrollbars
+   ========================================================================= */
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--color-paper); }
+::-webkit-scrollbar-thumb {
+    background: var(--color-hairline-strong);
+    border-radius: 5px;
+    border: 2px solid var(--color-paper);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--color-signal); }
+
+/* Utility classes */
+.ml-auto { margin-left: auto; }
+
+/* ============================================================================
+   Mobile
+   ========================================================================= */
+
+@media (max-width: 768px) {
+    .main-content {
+        margin: 20px 10px !important;
+        padding: 10px !important;
+    }
+
+    .login-container {
+        margin: 30px 15px;
+        padding: 24px;
+    }
+
+    .modal-content {
+        margin: 10px;
+        padding: 16px;
+        width: 95%;
+        max-height: 90vh;
+    }
+
+    h1, h2, h3 {
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+    }
+
+    button, .btn {
+        word-wrap: break-word;
+        white-space: normal;
+    }
+
+    /* The pill relaxes into a rounded card on narrow screens: four-plus links
+       plus a wordmark and a toggle cannot stay on one line. */
+    .sr-nav-wrap { padding: 0 8px; }
+
+    nav.sr-nav {
+        flex-direction: column;
+        gap: 10px;
+        border-radius: var(--radius-md);
+        padding: 12px 14px;
+    }
+
+    .sr-nav-links { justify-content: center; }
+
+    /* Strategy cards stack on mobile */
+    .player {
+        display: block !important;
+        width: 100% !important;
+        margin: 10px 0 !important;
+    }
+
+    th, td {
+        padding: 8px 4px !important;
+        font-size: 13px;
+    }
+
+    .admin-section {
+        padding: 15px !important;
+        margin-bottom: 15px !important;
+    }
 }

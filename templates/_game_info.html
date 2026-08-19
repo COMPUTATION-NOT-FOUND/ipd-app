@@ -16,10 +16,10 @@
     .gameinfo-body table.gi th, .gameinfo-body table.gi td {
         border: 1px solid var(--border-color); padding: 6px 9px; text-align: left; vertical-align: top;
     }
-    .gameinfo-body table.gi th { background: rgba(0,0,0,0.18); }
-    .gameinfo-body code { background: rgba(0,0,0,0.28); padding: 1px 5px; border-radius: 4px; }
-    .gameinfo-body .formula { font-family: monospace; font-size: 0.9em; background: rgba(0,0,0,0.22);
-        padding: 8px 10px; border-radius: 6px; margin: 4px 0; overflow-x: auto; }
+    .gameinfo-body table.gi th { background: color-mix(in srgb, var(--color-ink) 4%, transparent); }
+    .gameinfo-body code { background: color-mix(in srgb, var(--color-ink) 8%, transparent); padding: 1px 5px; border-radius: var(--radius-sm); }
+    .gameinfo-body .formula { font-family: monospace; font-size: 0.9em; background: color-mix(in srgb, var(--color-ink) 6%, transparent);
+        padding: 8px 10px; border-radius: var(--radius-sm); margin: 4px 0; overflow-x: auto; }
 </style>
 
 <div class="strategy game-info" style="border-left: 4px solid var(--info-color);">
