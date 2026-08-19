@@ -92,7 +92,7 @@
             <li><strong>Classes and exception handling work:</strong> you may define <code>class</code>es inside or alongside your strategy, and <code>try</code>/<code>except</code> is supported for the standard exception types (<code>Exception, ValueError, TypeError, KeyError, IndexError, LookupError, AttributeError, NameError, ZeroDivisionError, ArithmeticError, OverflowError, FloatingPointError, RuntimeError, RecursionError, StopIteration, NotImplementedError, AssertionError</code>). Note that <code>except Exception</code> will <em>not</em> catch the instruction-limit abort, so it cannot be used to hide an infinite loop.</li>
             <li><strong>Attribute access:</strong> <code>getattr</code>, <code>setattr</code>, <code>hasattr</code> and <code>delattr</code> are available but cannot reach names beginning with an underscore — the same rule that blocks writing <code>x.__class__</code> directly. Storing state on your own function (e.g. <code>MyStrategy.counter = 0</code>) is fine.</li>
             <li><strong>Per-round work limit:</strong> each call to your strategy may execute up to <strong>200,000</strong> Python line-steps. That is generous enough for history-scanning and model-building strategies, but an infinite loop is aborted and the match ends.</li>
-            <li><strong>OS Simulation specifics:</strong> practice runs are capped at <strong>4 strategies</strong>. <em>Homogeneous</em> benchmarks each strategy across all cores; <em>Heterogeneous</em> evaluates <strong>every</strong> combination of your strategies across the cores (so it needs at least as many strategies as cores).</li>
+            <li><strong>OS Simulation specifics:</strong> there is <strong>no cap on strategies</strong> (it runs on your own machine, so you get a time estimate before a big run instead). Cores must be <strong>2&#8211;8</strong>. <em>Homogeneous</em> benchmarks each strategy across all cores; <em>Heterogeneous</em> evaluates <strong>every</strong> combination of your strategies across the cores, so it needs at least as many strategies as cores and is rejected past <strong>60</strong> combinations.</li>
             <li><strong>Strategy Names Must Be Unique:</strong> Each strategy must have a different name.</li>
         </ul>
         <div style="background: rgba(16, 185, 129, 0.1); padding: 10px; border-radius: 5px; margin-top: 10px; border: 1px solid var(--success-color);">
@@ -497,8 +497,12 @@
             return await response.json();
         }
 
-        // Practice Mode Caps. Practice is capped at 4 strategies for EVERYONE (admins included)
-        // so a co-located class can't overload the single free-tier worker. Server enforces these too.
+        // Legacy practice caps from when simulations ran on the hosted free tier. Nothing reads
+        // these to block a run any more (every add-strategy path is explicitly uncapped, and the
+        // server-side /os-simulation route no longer caps either) -- runs happen on the user's own
+        // machine and are bounded by the pre-run time estimate instead. Kept only so the two
+        // MAX_*_STRATEGIES aliases below still resolve; the real remaining limit is
+        // MAX_COMBINATIONS on heterogeneous OS-sim runs, enforced server-side.
         const MAX_PRACTICE_STRATEGIES = 4;
         const MAX_PRACTICE_ROUNDS = 250;
         const MAX_NPLAYER_STRATEGIES = 4;
@@ -1129,7 +1133,7 @@
         };
 
         /* N-Player Practice Logic */
-        const MAX_NP_STRATEGIES = effectiveMaxNplayer;  // 4 for everyone (server enforces)
+        const MAX_NP_STRATEGIES = effectiveMaxNplayer;  // vestigial: nothing reads this to cap a run
         let npStrategyCount = 0;
 
         function toggleNPlayerPayoffFieldsPractice() {
@@ -1422,7 +1426,7 @@
 
         /* ===== OS Simulation Practice Logic ===== */
         let osStrategyCount = 0;
-        const MAX_OS_STRATEGIES = effectiveMaxNplayer;  // 4 for everyone (server enforces)
+        const MAX_OS_STRATEGIES = effectiveMaxNplayer;  // vestigial: nothing reads this to cap a run
 
         function addOsStrategy() {
             // No cap — runs on the user's own machine (parity with 1v1); a pre-run estimate warns.
