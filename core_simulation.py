@@ -1,6 +1,7 @@
 import random
 import math
 import itertools
+import time
 from cache_model import build_core_hierarchies
 from schedulers import build_scheduler
 from n_player_simulation import call_strategy
@@ -599,14 +600,34 @@ def run_full_simulation(strategies_data, num_cores=2, seed=None, scheduler='roun
 
 
 def run_heterogeneous_simulation(strategies_data, num_cores=2, seed=None,
-                                 scheduler='round_robin', max_combinations=24):
+                                 scheduler='round_robin', max_combinations=None,
+                                 time_budget_s=None, unlimited=False):
     """HETEROGENEOUS: each strategy used at most once.
 
-    Enumerates ALL itertools.combinations(strategies, num_cores) — no replacement — runs each
-    mixture across the workload profiles and ranks by throughput. Every combination is evaluated
-    and displayed; if the number of combinations would exceed `max_combinations`, the run is
-    rejected (raise) rather than silently sampled, so callers can ask the user to reduce
-    strategies/cores.
+    Enumerates itertools.combinations(strategies, num_cores) — no replacement — runs each mixture
+    across the workload profiles and ranks by throughput.
+
+    The full space is C(n, num_cores), which grows explosively: C(14, 8) is 3003 runs, roughly 20
+    minutes. Rather than refusing outright past a fixed count (the old behaviour, which cut off at
+    60 combinations, i.e. about 23 seconds of work), the run is bounded by wall-clock time and
+    reports honestly how much of the space it covered:
+
+      time_budget_s   stop once the *measured* average cost of a combination says the next one
+                      would overrun this many seconds. Measured rather than predicted because per-
+                      combination cost depends on how expensive the submitted strategies are, not
+                      just on the machine. None means no time bound.
+      max_combinations  optional absolute ceiling on the count. None means no ceiling. Truncates;
+                      it no longer raises.
+      unlimited       bypass both and evaluate the entire space.
+
+    At least one combination is always evaluated, so even an absurdly small budget returns a
+    leaderboard rather than nothing.
+
+    When the whole space is not covered, the subset is drawn *after a seeded shuffle*, never as a
+    lexicographic prefix. `itertools.combinations` emits low indices first, so a prefix is badly
+    biased: for C(14, 8) truncated to 150, strategies 0-3 appear in all 150 combinations while 12
+    and 13 appear in 51. A student's rank would then track their position in the list rather than
+    their strategy. Shuffling with the run's own seed keeps results reproducible.
     """
     funcs, names = [], []
     for strat in strategies_data:
@@ -623,15 +644,32 @@ def run_heterogeneous_simulation(strategies_data, num_cores=2, seed=None,
 
     all_combos = list(itertools.combinations(range(k), num_cores))
     total = len(all_combos)
-    if total > max_combinations:
-        raise ValueError(
-            f"Too many heterogeneous combinations ({total}) for {k} strategies on {num_cores} "
-            f"cores; the maximum is {max_combinations}. Reduce strategies or cores."
-        )
-    combos = all_combos
+
+    # Shuffle before any truncation so a partial run is an unbiased sample of the space rather
+    # than a lexicographic prefix (see the docstring for the measured skew). Seeded off the run's
+    # own seed, so the same seed always selects the same subset. Done unconditionally: when the
+    # whole space is covered the order is irrelevant (results are sorted by throughput at the
+    # end), so there is no branch here to get wrong.
+    combos = all_combos[:]
+    random.Random(seed).shuffle(combos)
+
+    ceiling = None if unlimited else max_combinations
+    if ceiling is not None and ceiling > 0:
+        combos = combos[:ceiling]
+
+    budget = None if unlimited else time_budget_s
 
     results = []
+    elapsed = 0.0
     for combo in combos:
+        # Stop before starting a combination the running average says would overrun the budget.
+        # `results` is checked so at least one always runs: a budget smaller than a single
+        # combination should still produce a leaderboard, not an empty one.
+        if budget is not None and results:
+            avg = elapsed / len(results)
+            if elapsed + avg > budget:
+                break
+        started = time.perf_counter()
         core_strategies = [funcs[i] for i in combo]
         assignment_details = [
             {'core_index': ci, 'strategy_name': names[combo[ci]]} for ci in range(num_cores)
@@ -672,6 +710,7 @@ def run_heterogeneous_simulation(strategies_data, num_cores=2, seed=None,
             'coop_rate': coop_avg,
             'workloads': per_wl_summary,
         })
+        elapsed += time.perf_counter() - started
 
     results.sort(key=lambda r: r['throughput'], reverse=True)
     return {
@@ -681,6 +720,12 @@ def run_heterogeneous_simulation(strategies_data, num_cores=2, seed=None,
         'strategy_count': k,
         'total_combinations': total,
         'evaluated': len(results),
+        # Consumers must be able to tell a complete sweep from a sample: the top-ranked mixture is
+        # only provably the best when sampled is False. `seed` is reported because it selects
+        # *which* subset was drawn, so a sampled run can be reproduced exactly.
+        'sampled': len(results) < total,
+        'seed': seed,
+        'elapsed_seconds': round(elapsed, 3),
         'baseline': run_baseline_simulation(num_cores=num_cores, seed=seed, scheduler=scheduler),
         'results': results,
     }

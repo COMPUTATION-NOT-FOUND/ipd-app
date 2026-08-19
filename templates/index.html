@@ -92,7 +92,7 @@
             <li><strong>Classes and exception handling work:</strong> you may define <code>class</code>es inside or alongside your strategy, and <code>try</code>/<code>except</code> is supported for the standard exception types (<code>Exception, ValueError, TypeError, KeyError, IndexError, LookupError, AttributeError, NameError, ZeroDivisionError, ArithmeticError, OverflowError, FloatingPointError, RuntimeError, RecursionError, StopIteration, NotImplementedError, AssertionError</code>). Note that <code>except Exception</code> will <em>not</em> catch the instruction-limit abort, so it cannot be used to hide an infinite loop.</li>
             <li><strong>Attribute access:</strong> <code>getattr</code>, <code>setattr</code>, <code>hasattr</code> and <code>delattr</code> are available but cannot reach names beginning with an underscore — the same rule that blocks writing <code>x.__class__</code> directly. Storing state on your own function (e.g. <code>MyStrategy.counter = 0</code>) is fine.</li>
             <li><strong>Per-round work limit:</strong> each call to your strategy may execute up to <strong>200,000</strong> Python line-steps. That is generous enough for history-scanning and model-building strategies, but an infinite loop is aborted and the match ends.</li>
-            <li><strong>OS Simulation specifics:</strong> there is <strong>no cap on strategies</strong> (it runs on your own machine, so you get a time estimate before a big run instead). Cores must be <strong>2&#8211;8</strong>. <em>Homogeneous</em> benchmarks each strategy across all cores; <em>Heterogeneous</em> evaluates <strong>every</strong> combination of your strategies across the cores, so it needs at least as many strategies as cores and is rejected past <strong>60</strong> combinations.</li>
+            <li><strong>OS Simulation specifics:</strong> there is <strong>no cap on strategies</strong> (it runs on your own machine, so you get a time estimate before a big run instead). Cores must be <strong>2&#8211;8</strong>. <em>Homogeneous</em> benchmarks each strategy across all cores; <em>Heterogeneous</em> evaluates <strong>every</strong> combination of your strategies across the cores, so it needs at least as many strategies as cores. A heterogeneous run is time-boxed to <strong>5 minutes</strong> and reports a random sample of the combinations if it runs out; tick <strong>Remove limits</strong> to sweep all of them.</li>
             <li><strong>Strategy Names Must Be Unique:</strong> Each strategy must have a different name.</li>
         </ul>
         <div style="background: rgba(16, 185, 129, 0.1); padding: 10px; border-radius: 5px; margin-top: 10px; border: 1px solid var(--success-color);">
@@ -400,6 +400,77 @@
             interprets each Cooperate (yield) / Defect (keep running) move natively. See
             <em>How it works — modes &amp; scoring</em> above for details.</p>
 
+        <!-- Sizing guidance, kept next to the controls it talks about: the core count and the
+             assignment mode directly below are what determine whether a run is two seconds or
+             twenty minutes. The .gameinfo-* / table.gi styles come from _game_info.html, which
+             this template includes further up. -->
+        <div class="strategy game-info" style="border-left: 4px solid var(--warning-color); margin: 20px 0;">
+        <details class="gameinfo-details">
+            <summary class="gameinfo-summary">
+                <h3 style="color: var(--warning-color) !important; margin: 0;">
+                    <i class="fas fa-gauge-high"></i> Sizing an OS Simulation run
+                </h3>
+            </summary>
+            <div class="gameinfo-body">
+                <p>This all runs on your own machine, so the only budget is your CPU and your patience.
+                   There is <strong>no cap on the number of strategies</strong>, and 1v1 and N-Player
+                   matches are milliseconds. Cost here comes almost entirely from how you set
+                   <em>Core Assignment</em> below.</p>
+
+                <h4>Homogeneous — cheap, scales linearly</h4>
+                <p>Each strategy is benchmarked across all cores: cost grows with the <em>number of
+                   strategies</em> (one run each), not combinatorially. Safe for any reasonable count.</p>
+
+                <h4>Heterogeneous — combinatorial, so it is time-boxed</h4>
+                <p>Every way of dealing your strategies onto the cores is evaluated, one distinct strategy per
+                   core: that is <code>C(strategies, cores)</code> runs, each over the 4 workload profiles
+                   (Uniform, Poisson, Mixed, Bursty). One combination costs roughly <strong>0.4 seconds</strong>,
+                   near enough independent of the core count, so the combination count <em>is</em> the cost:</p>
+                <table class="gi">
+                    <thead><tr><th>Strategies</th><th>Cores</th><th>Combinations <code>C(n,k)</code></th><th>Roughly</th></tr></thead>
+                    <tbody>
+                        <tr><td>4</td><td>2</td><td>6</td><td>2 seconds</td></tr>
+                        <tr><td>6</td><td>3</td><td>20</td><td>8 seconds</td></tr>
+                        <tr><td>8</td><td>4</td><td>70</td><td>28 seconds — 4 is the worst case for 8</td></tr>
+                        <tr><td>8</td><td>6</td><td>28</td><td>11 seconds — <em>more</em> cores here means fewer combinations</td></tr>
+                        <tr><td>8</td><td>8</td><td>1</td><td>under a second — one core per strategy, a single layout</td></tr>
+                        <tr><td>14</td><td>8</td><td>3003</td><td>about 20 minutes — sampled by default</td></tr>
+                    </tbody>
+                </table>
+
+                <h4>What happens when a run is large</h4>
+                <p>A run is never refused for being expensive. Heterogeneous gets a <strong>5 minute
+                   budget</strong>; it times each combination as it goes and stops once the next one would
+                   overrun. You are told the projected cost before anything starts, and whatever it did not
+                   reach is simply not evaluated: the results say <em>"750 of 3003 (sampled)"</em> and show a
+                   banner, rather than a number that looks complete.</p>
+                <p>The combinations that do run are picked <strong>at random</strong> (seeded off the run's
+                   seed, so a run is still reproducible), never as the first N in order. That matters:
+                   <code>C(n,k)</code> enumerates low indices first, so taking a prefix would let a strategy's
+                   rank depend on where it sat in your list. Picking at random gives every strategy roughly
+                   equal exposure.</p>
+                <p><strong>The trade:</strong> a sampled ranking is a good estimate, not a proof. The top
+                   mixture is the best <em>of those evaluated</em>; an unevaluated one may beat it. When you
+                   need the definitive answer, tick <strong>Remove limits</strong> below to sweep the whole
+                   space, and be ready to wait for it.</p>
+
+                <h4>Rules of thumb</h4>
+                <ul style="margin: 6px 0 0 0; padding-left: 20px;">
+                    <li>Cores must be between <strong>2 and 8</strong>.</li>
+                    <li>Heterogeneous needs at least <code>cores</code> strategies, since each core gets a
+                        different one. This is the one thing still refused outright, because fewer strategies
+                        than cores cannot be arranged at all.</li>
+                    <li><code>C(n,k)</code> is symmetric and <strong>peaks when <code>cores &#8776; strategies/2</code></strong>,
+                        then falls again — so moving the core count <em>away</em> from the middle in <em>either</em>
+                        direction (fewer <strong>or</strong> more cores) makes a run cheaper. At the extreme,
+                        <code>cores = strategies</code> gives exactly one layout.</li>
+                    <li>To cover the whole space without a long wait, nudge cores away from
+                        <code>strategies/2</code> or use fewer strategies, rather than removing limits.</li>
+                </ul>
+            </div>
+        </details>
+        </div>
+
         <h4 style="color: var(--primary-color) !important;">Configuration</h4>
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px;">
             <div>
@@ -413,6 +484,12 @@
                     <option value="homogeneous">Homogeneous (all cores one strategy)</option>
                     <option value="heterogeneous">Heterogeneous (each strategy at most once)</option>
                 </select>
+                <label style="display: flex; align-items: center; gap: 7px; margin-top: 8px; font-weight: normal;">
+                    <input type="checkbox" id="os_unlimited" style="width: auto; margin: 0; flex: 0 0 auto;">
+                    <span style="font-size: 0.85rem;">Remove limits (evaluate every combination)</span>
+                </label>
+                <small style="color: var(--text-secondary);">Heterogeneous runs stop after 5 minutes and
+                    report a random sample. Tick to sweep the whole space instead.</small>
             </div>
             <div>
                 <label style="display: block; margin-bottom: 5px; font-weight: bold;">Scheduler:</label>
@@ -639,17 +716,54 @@
             for (let i = 0; i < k; i++) r = r * (n - i) / (i + 1);
             return Math.round(r);
         }
+        // Seconds per core-assignment combination, measured rather than derived: each combination
+        // is 4 workload profiles x 50 processes, and that cost turns out to be flat in core count
+        // (0.405 / 0.386 / 0.384s at 2 / 3 / 4 cores). Deliberately not scaled by `cores`, which
+        // the previous estimate did and got wrong. A pessimistic strategy that burns its whole
+        // instruction allowance each call runs slower than this, so treat it as a floor.
+        const OS_SECS_PER_COMBINATION = 0.4;
+        const OS_TIME_BUDGET_SECS = 300;   // mirrors OS_SIM_TIME_BUDGET_S in app.py
+
+        function humanSecs(secs) {
+            if (secs < 90) return `about ${Math.max(1, Math.round(secs))}s`;
+            return `about ${Math.round(secs / 60)} min`;
+        }
+
         function confirmWorkload(kind, n, rounds, modes, extra) {
             let desc, decisions;
             if (kind === 'nplayer') {
                 desc = `${n} players · ${modes} mode(s) × ${rounds} rounds`;
                 decisions = rounds * modes * Math.max(2, n);
             } else if (kind === 'os') {
+                // OS sim is priced per combination, not per move, so it gets its own dialog rather
+                // than going through the shared "~N moves" wording below.
                 const cores = (extra && extra.numCores) || 2;
+                const isHet = extra && extra.assignment === 'heterogeneous';
+                const unlimited = !!(extra && extra.unlimited);
                 // Homogeneous = one run per strategy; heterogeneous enumerates C(n, cores) mixtures.
-                const comb = (extra && extra.assignment === 'heterogeneous') ? nCr(n, cores) : n;
-                desc = `${comb.toLocaleString()} core-assignment combination(s) on ${cores} cores · ${n} strategies`;
-                decisions = comb * cores * 300;   // ~300 ticks per run, rough
+                const comb = isHet ? nCr(n, cores) : n;
+                const fullSecs = comb * OS_SECS_PER_COMBINATION;
+                const head = `${comb.toLocaleString()} core-assignment combination(s) on ${cores} cores, from ${n} strategies.`;
+
+                if (!isHet || unlimited || fullSecs <= OS_TIME_BUDGET_SECS) {
+                    const warn = (unlimited && fullSecs > OS_TIME_BUDGET_SECS)
+                        ? `\n\nLimits are OFF, so all of them will run. This will keep a CPU core busy for the `
+                          + `whole time, the page will sit unresponsive with no progress bar, and there is no `
+                          + `cancel button: the only way to stop it early is to close the app. Nothing is saved `
+                          + `until it finishes.`
+                        : '';
+                    return confirm(`${head}\n\nEstimated ${humanSecs(fullSecs)} on this machine.${warn}\n\nContinue?`);
+                }
+
+                // Over budget and limits left on: say plainly that the answer will be partial.
+                const willRun = Math.max(1, Math.floor(OS_TIME_BUDGET_SECS / OS_SECS_PER_COMBINATION));
+                const pct = ((willRun / comb) * 100).toFixed(1);
+                return confirm(
+                    `${head}\n\nRunning all of them would take ${humanSecs(fullSecs)}. To stay inside the `
+                    + `${Math.round(OS_TIME_BUDGET_SECS / 60)} minute budget, about ${willRun.toLocaleString()} `
+                    + `of them (${pct}%) will be evaluated, chosen at random.\n\nThe ranking will be over that `
+                    + `sample, so the top mixture may not be the true best. Tick "Remove limits" to sweep all `
+                    + `${comb.toLocaleString()}.\n\nContinue?`);
             } else {
                 const matches = (n * (n - 1) / 2) * modes;
                 desc = `${matches.toLocaleString()} matches × ${rounds} rounds`;
@@ -1485,14 +1599,20 @@
             const strategies = roster.map(r => ({ name: r.name, code: r.code }));
             if (strategies.length < 2) { alert('Select at least 2 participants!'); return; }
 
-            // No cap — warn with the combination count + a rough time estimate (parity with 1v1).
-            if (!confirmWorkload('os', strategies.length, 0, 0, { numCores, assignment: coreAssignmentMode })) return;
-            // Heterogeneous places one distinct strategy per core, so it needs at least num_cores strategies.
+            // Validity before cost: heterogeneous places one distinct strategy per core, so fewer
+            // strategies than cores cannot be arranged at all. Checked ahead of the confirm dialog
+            // so the user isn't asked to approve a run that would only then be refused.
             if (coreAssignmentMode === 'heterogeneous' && strategies.length < numCores) {
                 alert(`Heterogeneous assignment needs at least ${numCores} strategies (one per core). Add strategies or lower cores.`); return;
             }
 
-            const payload = { strategies, num_cores: numCores, core_assignment_mode: coreAssignmentMode, scheduler, seed };
+            const unlimited = document.getElementById('os_unlimited').checked;
+            // No cap — the run is bounded by time and reports what it covered. The dialog states
+            // how long it will take and, when sampling, how much of the space will be skipped.
+            if (!confirmWorkload('os', strategies.length, 0, 0,
+                                 { numCores, assignment: coreAssignmentMode, unlimited })) return;
+
+            const payload = { strategies, num_cores: numCores, core_assignment_mode: coreAssignmentMode, scheduler, seed, unlimited };
             document.getElementById('osResults').innerHTML = '<div style="text-align: center; padding: 20px;"><i class="fas fa-spinner fa-spin"></i> Running OS simulation...</div>';
 
             try {

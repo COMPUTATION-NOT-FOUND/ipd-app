@@ -301,6 +301,20 @@ function renderOSSimulation(container, sim, opts) {
     const schedLabel = OS_SIM_SCHEDULER_LABELS[scheduler] || scheduler;
     const isHet = hasHetSim;
 
+    // How much of the C(n, cores) space was actually covered. `sampled` is authoritative when
+    // present; results published before sampling existed have neither flag, so fall back to
+    // comparing the two counts rather than mislabelling old data as a partial sweep.
+    const hetEvaluated = isHet ? (hetSim.evaluated || 0) : 0;
+    const hetTotal = isHet ? (hetSim.total_combinations || hetEvaluated) : 0;
+    const isHetSampled = isHet && (typeof hetSim.sampled === 'boolean'
+        ? hetSim.sampled
+        : (hetTotal > 0 && hetEvaluated < hetTotal));
+    const hetSeedNote = (hetSim && hetSim.seed !== null && hetSim.seed !== undefined)
+        ? ` with seed ${hetSim.seed}` : '';
+    const combinationsLabel = isHetSampled
+        ? `${hetEvaluated.toLocaleString()} of ${hetTotal.toLocaleString()} (sampled)`
+        : `${hetEvaluated.toLocaleString()} (all)`;
+
     // The header (title + config bar) is shown by default. When opts.header === false the caller
     // (e.g. the results modal) supplies its own shared header, so we skip ours to avoid duplication.
     // On the practice page, wrap in the same grey "results" card as 1v1 / N-Player; the modal
@@ -316,7 +330,21 @@ function renderOSSimulation(container, sim, opts) {
             <span><span class="badge" style="background-color:${isHet ? 'var(--warning-color)' : 'var(--info-color)'};">${isHet ? 'HETEROGENEOUS' : 'HOMOGENEOUS'}</span></span>
             <span><strong>Scheduler:</strong> ${osSimEsc(schedLabel)}</span>
             <span><strong>Cores:</strong> ${numCores}</span>
-            ${isHet ? `<span><strong>Combinations:</strong> ${hetSim.evaluated} (all)</span>` : ''}
+            ${isHet ? `<span><strong>Combinations:</strong> ${osSimEsc(combinationsLabel)}</span>` : ''}
+        </div>`;
+    }
+
+    // Sampling notice. Emitted outside the header block on purpose: a published result viewed in
+    // the results modal (which supplies its own header) must carry the caveat too, otherwise a
+    // sampled tournament reads as an exhaustive one on the website.
+    if (isHetSampled) {
+        html += `
+        <div style="background: color-mix(in srgb, var(--warning-color) 12%, transparent); border: 1px solid color-mix(in srgb, var(--warning-color) 35%, transparent); color: var(--text-primary); padding: 12px 15px; border-radius: var(--radius-sm); margin-bottom: 18px;">
+            <strong style="color: var(--warning-color);"><i class="fas fa-triangle-exclamation"></i> Partial sweep:</strong>
+            ${hetEvaluated.toLocaleString()} of ${hetTotal.toLocaleString()} core assignments were evaluated
+            (${((hetEvaluated / hetTotal) * 100).toFixed(1)}%), chosen at random${hetSeedNote}.
+            The ranking below is over that sample, so <strong>the top mixture is not provably the best</strong>
+            &mdash; an unevaluated assignment may beat it. Re-run with limits removed to sweep the whole space.
         </div>`;
     }
 

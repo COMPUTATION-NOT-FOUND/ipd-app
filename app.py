@@ -143,32 +143,43 @@ if hasattr(sys, 'set_int_max_str_digits'):
     except (ValueError, OverflowError):
         pass
 
-# Max strategy->core combinations evaluated by the 'heterogeneous' assignment. The space is
-# C(strategies, num_cores) (each strategy used at most once). Every combination is enumerated and
-# displayed; if the count would exceed this ceiling the run is rejected (400) so the user reduces
-# strategies/cores — never silently sampled. Bounds worst-case compute on the user's machine.
+# Wall-clock budget for a heterogeneous OS-sim run, in seconds. The space is C(strategies,
+# num_cores), which explodes: C(14, 8) is 3003 runs, roughly 20 minutes. Runs used to be *rejected*
+# past a fixed count of 60 combinations, but 60 is only about 23 seconds of work -- far below what
+# anyone minds waiting for, so the cap refused runs nobody would have objected to. Now the run
+# proceeds and stops when it runs out of time, reporting how much of the space it covered.
+#
+# Budgeted by measured time rather than a predicted count because per-combination cost depends on
+# how expensive the submitted strategies are, not just on the machine.
 try:
-    MAX_COMBINATIONS = int(os.environ.get('MAX_COMBINATIONS', '60'))
+    OS_SIM_TIME_BUDGET_S = float(os.environ.get('OS_SIM_TIME_BUDGET_S', '300'))
 except (TypeError, ValueError):
-    MAX_COMBINATIONS = 60
-if MAX_COMBINATIONS < 1:
-    MAX_COMBINATIONS = 60
+    OS_SIM_TIME_BUDGET_S = 300.0
+if OS_SIM_TIME_BUDGET_S <= 0:
+    OS_SIM_TIME_BUDGET_S = 300.0
+
+# Optional absolute ceiling on the combination count, kept only for back-compat with anyone who
+# had set MAX_COMBINATIONS. Unset means no ceiling: the time budget is the real bound. It now
+# truncates the (shuffled) space instead of rejecting the run.
+try:
+    _mc = os.environ.get('MAX_COMBINATIONS')
+    MAX_COMBINATIONS = int(_mc) if _mc not in (None, '') else None
+except (TypeError, ValueError):
+    MAX_COMBINATIONS = None
+if MAX_COMBINATIONS is not None and MAX_COMBINATIONS < 1:
+    MAX_COMBINATIONS = None
 
 
 def _heterogeneous_combination_error(num_cores, n_strategies):
-    """Return a user-facing error string if a heterogeneous OS-sim run is infeasible, else None.
+    """Return a user-facing error string if a heterogeneous OS-sim run is impossible, else None.
 
-    Heterogeneous places one distinct strategy per core, so it needs at least ``num_cores``
-    strategies; and it enumerates every ``C(n, cores)`` mixture, which must stay within
-    ``MAX_COMBINATIONS`` (we reject rather than sample so every displayed run is complete).
+    Only validity is checked here, never cost. Heterogeneous places one *distinct* strategy per
+    core, so fewer strategies than cores cannot be arranged at all. An expensive-but-possible run
+    is no longer refused: it is bounded by ``OS_SIM_TIME_BUDGET_S`` and reported as sampled.
     """
     if n_strategies < num_cores:
         return (f"Heterogeneous assignment needs at least num_cores ({num_cores}) strategies; "
                 f"you provided {n_strategies}. Add strategies, lower cores, or use homogeneous.")
-    total = math.comb(n_strategies, num_cores)
-    if total > MAX_COMBINATIONS:
-        return (f"Too many heterogeneous combinations ({total}) for {n_strategies} strategies on "
-                f"{num_cores} cores; the maximum is {MAX_COMBINATIONS}. Reduce strategies or cores.")
     return None
 
 # Valid CPU scheduler policies for the OS simulation (see schedulers.py).
@@ -2082,7 +2093,7 @@ def parse_payoff_model(config):
 
 
 def _run_core_simulation(strategies, *, num_cores, scheduler, core_assignment_mode,
-                         core_sim_seed):
+                         core_sim_seed, unlimited=False):
     """Run the OS simulation on exactly the supplied strategies, returning result/config blocks.
 
     No screening / top-K selection: the user's submitted strategies *are* the pool.
@@ -2099,7 +2110,8 @@ def _run_core_simulation(strategies, *, num_cores, scheduler, core_assignment_mo
         if core_assignment_mode == 'heterogeneous':
             core_simulation_heterogeneous = run_heterogeneous_simulation(
                 pool, num_cores=num_cores, seed=core_sim_seed, scheduler=scheduler,
-                max_combinations=MAX_COMBINATIONS)
+                max_combinations=MAX_COMBINATIONS,
+                time_budget_s=OS_SIM_TIME_BUDGET_S, unlimited=unlimited)
         else:
             core_simulation_results = run_full_simulation(
                 pool, num_cores=num_cores, seed=core_sim_seed, scheduler=scheduler)
@@ -2165,7 +2177,7 @@ def _run_core_simulation(strategies, *, num_cores, scheduler, core_assignment_mo
 
 
 def run_standalone_core_simulation(strategies, *, num_cores, scheduler,
-                                   core_assignment_mode, seed):
+                                   core_assignment_mode, seed, unlimited=False):
     """Run the OS core simulation on its own (no tournament needed).
 
     Runs on exactly the supplied strategies — no screening, no top-K. Returns the three
@@ -2173,7 +2185,7 @@ def run_standalone_core_simulation(strategies, *, num_cores, scheduler,
     """
     return _run_core_simulation(
         strategies, num_cores=num_cores, scheduler=scheduler,
-        core_assignment_mode=core_assignment_mode, core_sim_seed=seed)
+        core_assignment_mode=core_assignment_mode, core_sim_seed=seed, unlimited=unlimited)
 
 
 @app.route('/os-simulation', methods=['POST'])
@@ -2188,7 +2200,8 @@ def os_simulation():
     data = request.json or {}
 
     # No strategy-count cap on the local app (it runs on the user's own machine, like 1v1).
-    # MAX_COMBINATIONS still bounds the cores×assignment blow-up below.
+    # A heterogeneous cores×assignment blow-up is bounded by OS_SIM_TIME_BUDGET_S at run time
+    # rather than refused up front, unless the caller opted out via `unlimited`.
     strategies = data.get('strategies', [])
     if not isinstance(strategies, list):
         return jsonify({'error': 'Strategies must be a list'}), 400
@@ -2234,10 +2247,16 @@ def os_simulation():
     except (TypeError, ValueError):
         return jsonify({'error': 'seed must be an integer'}), 400
 
+    # Opt out of the time budget and evaluate the whole space. The user has been warned in the
+    # browser what that costs; this runs on their own machine, so it is their call to make.
+    unlimited = data.get('unlimited', False)
+    if not isinstance(unlimited, bool):
+        return jsonify({'error': 'unlimited must be a boolean'}), 400
+
     try:
         result = run_standalone_core_simulation(
             clean, num_cores=num_cores, scheduler=scheduler,
-            core_assignment_mode=core_assignment_mode, seed=seed)
+            core_assignment_mode=core_assignment_mode, seed=seed, unlimited=unlimited)
         return jsonify(result)
     except Exception as e:
         app.logger.error(f"Standalone OS simulation error: {e}")
