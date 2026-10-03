@@ -185,7 +185,13 @@
                 document.getElementById('importName').textContent = data.name;
                 document.getElementById('importCode').value = data.code;
                 document.getElementById('importPanel').style.display = 'block';
-                showMsg('Imported "' + data.name + '" — passed the local sandbox.', true);
+                if (data.flagged) {
+                    showMsg('Imported "' + data.name + '" — ⚠ an admin FLAGGED this strategy'
+                        + (data.flag_reason ? ' (' + data.flag_reason + ')' : '')
+                        + '. It passed the local sandbox but hung or errored when screened in isolation.', false);
+                } else {
+                    showMsg('Imported "' + data.name + '" — passed the local sandbox.', true);
+                }
             } catch (e) { showMsg(e.message, false); }
         }
 

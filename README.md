@@ -51,8 +51,12 @@ pip install -r requirements.txt
 
 **Step 3 — run it:**
 ```bash
-python app.py                       # Windows, if that hangs: waitress-serve app:app
+python app.py                       # Windows, if that hangs: waitress-serve --host=127.0.0.1 app:app
 ```
+
+> Keep the `--host=127.0.0.1` on the waitress fallback. Without it `waitress-serve` listens on
+> every network interface (`0.0.0.0`), which would expose this single-user app — and its built-in
+> local-owner session — to anyone else on your network.
 
 Then open **http://127.0.0.1:5000** in your browser. That's it — the app is running.
 
@@ -151,7 +155,10 @@ everyone's entries can be told apart.)
 
 - Forgetting to `return` `'C'` or `'D'` (e.g. returning `1`, `True`, or nothing) → your strategy
   will be flagged. Always return one of the two strings.
-- Name mismatch: if your strategy is called "Grudger", the function must be `def Grudger(...)`.
+- The strategy **name** is just a display label (it can contain spaces, e.g. "Grim Trigger"); it
+  does **not** have to match your function's name. Your code only needs to define one strategy
+  function with the right signature. Names must be unique within a run, so each entry can be told
+  apart in the results.
 - Use `meta['rng']` for randomness, not `import random` + `random.random()`, if you want repeatable
   results.
 - On round 1 `last_moves` is empty (`[]`) — handle that case (usually start by cooperating).

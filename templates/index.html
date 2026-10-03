@@ -231,6 +231,11 @@
         <!-- Start (bottom, mirrors N-player) -->
         <div style="text-align: center; margin-top: 30px;">
             <button data-action="startTournament" id="tournamentBtn" style="background: var(--success-color); color: var(--color-paper); font-size: 1.1em; padding: 15px 30px;"><i class="fas fa-play"></i> Start Round Robin Tournament</button>
+            <div style="margin-top: 10px; font-size: 13px;">
+                <label title="Screen every strategy in a separate process with a time limit first, so one that hangs or crashes is flagged and left out instead of stalling the run. Recommended when running over untrusted strategies.">
+                    <input type="checkbox" id="isolated1v1" style="width:auto;"> Run isolated (screen &amp; flag slow/broken strategies)
+                </label>
+            </div>
         </div>
 
     </div><!-- /.strategy (1v1 controls) -->
@@ -380,9 +385,14 @@
         </div>
 
         <div style="text-align: center; margin-top: 30px;">
-             <button data-action="startNPlayerTournament" style="background: var(--success-color); color: var(--color-paper); padding: 15px 30px; font-size: 1.1em;">
+             <button data-action="startNPlayerTournament" id="nplayerBtn" style="background: var(--success-color); color: var(--color-paper); padding: 15px 30px; font-size: 1.1em;">
                 <i class="fas fa-play"></i> Start N-Player Tournament
              </button>
+             <div style="margin-top: 10px; font-size: 13px;">
+                <label title="Screen every strategy in a separate process with a time limit first, so one that hangs or crashes is flagged and left out instead of stalling the run. Recommended when running over untrusted strategies.">
+                    <input type="checkbox" id="isolatedNp" style="width:auto;"> Run isolated (screen &amp; flag slow/broken strategies)
+                </label>
+             </div>
         </div>
     </div>
 
@@ -556,6 +566,8 @@
     <script nonce="{{ csp_nonce }}">
         // Role flag (from server session) — admins are uncapped and may curate the gallery
         const isAdmin = {{ 'true' if session.get('user', {}).get('role') == 'admin' else 'false' }};
+        // Configured class website base URL (blank if the Hub isn't set up); used for handoff links.
+        const HUB_BASE_URL = {{ hub_base_url | tojson }};
 
         // When the server session expires, @login_required redirects API calls (302) to the login
         // page, so a fetch() silently receives the login HTML instead of JSON. Detect that and send
@@ -663,12 +675,14 @@
                     <button data-action="loadExample" data-arg="${strategyCount}" data-arg2="cooperate" class="btn btn-secondary" style="padding: 5px 10px; font-size: 12px !important;">Always Cooperate</button>
                     <button data-action="loadExample" data-arg="${strategyCount}" data-arg2="defect" class="btn btn-secondary" style="padding: 5px 10px; font-size: 12px !important;">Always Defect</button>
                 </div>
-                ${isAdmin ? `
                 <div style="margin-top: 10px; text-align: center;">
-                    <button data-action="saveStrategyToGallery" data-arg="${strategyCount}" style="background: var(--success-color); color: var(--color-paper); padding: 8px 16px; font-size: 12px;">
-                        <i class="fas fa-save"></i> Save to Gallery
+                    <button data-action="saveStrategyLocal" data-arg="${strategyCount}" style="background: var(--success-color); color: var(--color-paper); padding: 8px 16px; font-size: 12px;">
+                        <i class="fas fa-save"></i> Save locally
                     </button>
-                </div>` : ''}
+                    <button data-action="addStrategyToWebsite" data-arg="${strategyCount}" title="Admin: publish this strategy to the shared class website" style="display:${isAdmin ? 'inline-block' : 'none'}; background: var(--primary-color); color: var(--color-paper); padding: 8px 16px; font-size: 12px; margin-left:6px;">
+                        <i class="fas fa-cloud-arrow-up"></i> Add to website gallery
+                    </button>
+                </div>
             `;
             
             container.appendChild(strategyDiv);
@@ -729,6 +743,47 @@
             return `about ${Math.round(secs / 60)} min`;
         }
 
+        // Spinner with a live elapsed-seconds counter, and (optionally) disable the Run button
+        // for the duration so a run can't be started twice. Returns a handle whose stop() clears
+        // the timer and restores the button — always call it in a finally.
+        function runSpinner(containerId, label, buttonId) {
+            const el = document.getElementById(containerId);
+            const btn = buttonId ? document.getElementById(buttonId) : null;
+            const origHtml = btn ? btn.innerHTML : null;
+            if (btn) btn.disabled = true;
+            const started = Date.now();
+            function render() {
+                const secs = Math.floor((Date.now() - started) / 1000);
+                if (el) el.innerHTML = '<div style="text-align: center; padding: 20px;">'
+                    + '<i class="fas fa-spinner fa-spin"></i> ' + label + '… '
+                    + '<span style="color: var(--text-secondary);">(' + secs + 's elapsed)</span></div>';
+                if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Running… (' + secs + 's)';
+            }
+            render();
+            const timerId = setInterval(render, 1000);
+            return { stop() {
+                clearInterval(timerId);
+                if (btn) { btn.disabled = false; if (origHtml !== null) btn.innerHTML = origHtml; }
+            } };
+        }
+
+        // After an isolated run, show which strategies were screened out (and why) at the top of
+        // the results. `flags` is [{name, reason, detail}]; absent/empty when nothing was flagged.
+        function renderFlagsBanner(containerId, flags) {
+            const el = document.getElementById(containerId);
+            if (!el || !Array.isArray(flags) || flags.length === 0) return;
+            const esc = (s) => String(s == null ? '' : s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+            const rows = flags.map(f => `<li><strong>${esc(f.name)}</strong> — ${esc(f.reason)}`
+                + (f.detail ? `: <span style="color:var(--text-secondary);">${esc(f.detail)}</span>` : '') + `</li>`).join('');
+            el.insertAdjacentHTML('afterbegin',
+                `<div class="results" style="border:1px solid var(--warning-color); background: rgba(234,179,8,0.10); margin-bottom:16px;">
+                    <h4 style="margin:0 0 8px 0; color: var(--warning-color);">
+                        <i class="fas fa-flag"></i> ${flags.length} strategy(ies) flagged and excluded by isolated screening</h4>
+                    <ul style="margin:0 0 0 18px;">${rows}</ul>
+                </div>`);
+        }
+
         function confirmWorkload(kind, n, rounds, modes, extra) {
             let desc, decisions;
             if (kind === 'nplayer') {
@@ -752,7 +807,7 @@
                           + `cancel button: the only way to stop it early is to close the app. Nothing is saved `
                           + `until it finishes.`
                         : '';
-                    return confirm(`${head}\n\nEstimated ${humanSecs(fullSecs)} on this machine.${warn}\n\nContinue?`);
+                    return confirm(`${head}\n\nEstimated at least ${humanSecs(fullSecs)} — slower machines or heavier strategies take longer.${warn}\n\nContinue?`);
                 }
 
                 // Over budget and limits left on: say plainly that the answer will be partial.
@@ -771,8 +826,9 @@
             }
             const secs = Math.max(1, Math.round(decisions / 40000));   // ~40k moves/sec, rough
             const t = secs < 90 ? `about ${secs}s` : `about ${Math.round(secs / 60)} min`;
-            return confirm(`You're about to simulate ${desc} on this machine `
-                + `(~${decisions.toLocaleString()} moves). With your hardware this will take ${t}. Continue?`);
+            return confirm(`You're about to simulate ${desc} `
+                + `(~${decisions.toLocaleString()} moves). This should take at least ${t} — slower `
+                + `machines or heavier strategies take longer. Continue?`);
         }
 
         // After a run, offer to publish to the website (handoff). Shown for all modes.
@@ -783,6 +839,14 @@
             // Only your own local players are registered as bots. Player submissions and organizer
             // practice strategies are already known on the website, so they are NOT re-registered.
             const locals = (roster || []).filter(r => r.source === 'local').length;
+            // Flags from isolated screening that can be matched to a website strategy (have an id).
+            const flaggable = (Array.isArray(result && result.flags) ? result.flags : [])
+                .filter(f => f.website_id);
+            const flagNote = flaggable.length
+                ? `<p style="color:var(--warning-color);"><i class="fas fa-flag"></i> ${flaggable.length}
+                   screened-out strategy(ies) from the website will be <strong>flagged</strong> there when
+                   you confirm, so classmates see a warning on them.</p>`
+                : '';
             el.style.display = 'block';
             // Per-mode element ids so the 1v1 / N-Player / OS-sim panels don't collide.
             el.innerHTML = `
@@ -791,6 +855,7 @@
                 <p>Publishes this tournament to the website. ${locals} local player(s) will be saved there
                 as bots (player submissions and practice strategies are not re-registered). You'll log in
                 on the website and choose post-now or schedule.</p>
+                ${flagNote}
                 <input type="text" id="submitName_${kind}" placeholder="Tournament name" value="Tournament"
                        style="width:55%; padding:8px; margin-right:8px;">
                 <button id="submitResultsBtn_${kind}" style="background: var(--success-color); color:var(--color-paper); padding:10px 18px;">
@@ -812,7 +877,10 @@
             // strategies and player submissions are NOT re-registered as bots.
             const local_bots = (roster || []).filter(r => r.source === 'local')
                 .map(r => ({ name: r.name, code: r.code }));
-            const pkg = { kind, name, result, participants, local_bots };
+            // Carry any isolated-screening flags so the admin can flag these strategies on the
+            // website when they confirm the publish (only those with a website_id can be matched).
+            const flags = Array.isArray(result && result.flags) ? result.flags : [];
+            const pkg = { kind, name, result, participants, local_bots, flags };
             status.textContent = 'Staging to website…';
             try {
                 const resp = await fetch('/hub/publish-result', {
@@ -859,8 +927,9 @@
                 discount_factor: parseFloat(document.getElementById('discount_factor').value),
                 stochastic_prob: parseFloat(document.getElementById('stochastic_prob').value),
                 seed: seedInput ? parseInt(seedInput) : null,
+                isolated: document.getElementById('isolated1v1')?.checked || false,
             };
-            document.getElementById('results').innerHTML = '<div style="text-align: center; padding: 20px;"><i class="fas fa-spinner fa-spin"></i> Running tournament...</div>';
+            const spinner = runSpinner('results', 'Running tournament', 'tournamentBtn');
 
             try {
                 const response = await fetch('/tournament', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(tournamentData) });
@@ -869,9 +938,12 @@
                 currentTournamentResult = result;
                 lastRoster1v1 = roster;
                 displayTournamentResults(result);
+                renderFlagsBanner('results', result.flags);
                 showSubmitPanel('1v1', result, roster);
             } catch (error) {
                 document.getElementById('results').innerHTML = `<div class="results" style="color: var(--danger-color);"><i class="fas fa-times-circle"></i> Error: ${escapeHtml(error.message)}</div>`;
+            } finally {
+                spinner.stop();
             }
         }
         
@@ -1078,22 +1150,52 @@
         async function checkAuthStatus() {
             try { const res = await fetch('/check-auth'); const d = await res.json(); isUserLoggedIn = d.logged_in; updateSaveButtons(); } catch(e){}
         }
-        
+
         function updateSaveButtons() {
-             // Only admins may publish to the shared gallery
-             const btns = document.querySelectorAll('button[data-action="saveStrategyToGallery"]');
-             btns.forEach(b => b.style.display = isAdmin ? 'inline-block' : 'none');
+             // "Save locally" is for everyone (it writes to this machine only). The
+             // "Add to website gallery" handoff is admin-only (it publishes to the shared site).
+             document.querySelectorAll('button[data-action="addStrategyToWebsite"]')
+                 .forEach(b => b.style.display = isAdmin ? 'inline-block' : 'none');
         }
-        
-        async function saveStrategyToGallery(id) {
+
+        // Save the edited strategy to the private, machine-local gallery, then refresh the
+        // "Local" column in every participant checklist so it can be ticked into a tournament.
+        async function saveStrategyLocal(id) {
              const name = document.getElementById(`strategyName${id}`).value;
              const code = document.getElementById(`strategyCode${id}`).value;
              try {
                  const res = await fetch('/save-strategy', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name, code}) });
                  const d = await res.json();
                  alert(d.success ? d.message : d.error);
-                 if(d.success) loadGallery('1v1', 'galleryContainer', 'galleryStatus');
+                 if (d.success) { await loadLocalGallery(); rerenderAllChecklists(); }
              } catch(e) { alert(e.message); }
+        }
+
+        // Admin-only: push a strategy to the shared WEBSITE gallery. The local app holds no
+        // website credentials, so this reuses the same handoff as publishing a result — it opens
+        // the website's submit page prefilled, where the admin logs in and confirms.
+        function addStrategyToWebsite(id) {
+             const name = document.getElementById(`strategyName${id}`).value || '';
+             const code = document.getElementById(`strategyCode${id}`).value || '';
+             if (!HUB_BASE_URL) { alert('No class website configured (set HUB_BASE_URL in your .env).'); return; }
+             if (!name.trim() || !code.trim()) { alert('Enter a strategy name and code first.'); return; }
+             const url = HUB_BASE_URL.replace(/\/$/, '')
+                 + '/save-strategy?name=' + encodeURIComponent(name)
+                 + '&code=' + encodeURIComponent(code);
+             window.open(url, '_blank');
+        }
+
+        // Machine-local saved strategies (the "Local" checklist column). Loaded once on page load
+        // and after each local save; kept separate from the website-backed GALLERY pools.
+        let LOCAL_STRATS = [];
+        async function loadLocalGallery() {
+            try { const r = await fetch('/local-gallery/list'); const d = await r.json(); LOCAL_STRATS = d.strategies || []; }
+            catch(e) { LOCAL_STRATS = []; }
+        }
+        function rerenderAllChecklists() {
+            renderParticipantChecklist('1v1', 'galleryContainer', 'galleryStatus');
+            renderParticipantChecklist('nplayer', 'npGalleryContainer', 'npGalleryStatus');
+            renderParticipantChecklist('os', 'osGalleryContainer', 'osGalleryStatus');
         }
         
         // ---- Website strategies as a "Select Participants" checklist (per mode) ----
@@ -1119,16 +1221,21 @@
             // for /api/practice-strategies). `idx` is the ORIGINAL index in that pool, so selection
             // + bot replication keep working after we split players vs bots for display.
             function rowHtml(s, idx, p, isBot) {
-                const tag = p === 'practice' ? 'Practice' : (isBot ? '[BOT]' : 'Player');
+                const tag = p === 'practice' ? 'Practice' : (p === 'local' ? 'Local' : (isBot ? '[BOT]' : 'Player'));
                 // Only bots may be replicated within a tournament (count input).
                 const count = isBot
                     ? `<input type="number" min="1" max="50" value="1" id="cnt_${target}_${p}_${idx}" title="Copies in this tournament">`
+                    : '';
+                // Strategies an admin flagged via isolated screening carry a warning so classmates
+                // know this one hung/crashed when run in isolation.
+                const flag = s.flagged
+                    ? ` <i class="fas fa-flag" style="color:var(--warning-color);" title="Flagged by an admin${s.flag_reason ? ' (' + galleryEscape(s.flag_reason) + ')' : ''}"></i>`
                     : '';
                 return `<div class="part-row">
                     <input type="checkbox" class="part-check-${target}" data-section="${isBot ? 'bot' : p}"
                            data-pool="${p}" data-idx="${idx}" data-type="${isBot ? 'bot' : 'tournament'}"
                            id="chk_${target}_${p}_${idx}">
-                    <label for="chk_${target}_${p}_${idx}" title="${galleryEscape(s.name)}">${galleryEscape(s.name)} <small>(${tag})</small></label>${count}
+                    <label for="chk_${target}_${p}_${idx}" title="${galleryEscape(s.name)}">${galleryEscape(s.name)} <small>(${tag})</small>${flag}</label>${count}
                 </div>`;
             }
             // Each section is its own card column with its OWN Toggle All (scoped via data-section).
@@ -1149,17 +1256,42 @@
                 (isBot ? botRows : playerRows).push(rowHtml(s, idx, 'player', isBot));
             });
             const practiceRows = practice.map((s, idx) => rowHtml(s, idx, 'practice', false));
+            // Machine-local saved strategies ("Save locally"); always available, no Hub needed.
+            const localRows = (LOCAL_STRATS || []).map((s, idx) => rowHtml(s, idx, 'local', false));
+
+            c.style.display = 'block';
+
+            // Empty gallery AND no local saves: this is what students see on a fresh install with no
+            // Hub configured, so say WHY it's empty and how to fill it rather than showing blank
+            // "None." columns (which reads like a broken feature — Toggle All then has nothing to do).
+            if (playerRows.length === 0 && botRows.length === 0 && practiceRows.length === 0 && localRows.length === 0) {
+                c.innerHTML = `<div class="part-empty" style="padding:14px; line-height:1.5;">
+                    <i class="fas fa-circle-info"></i> The class gallery is empty.
+                    To fetch classmates' strategies, bots and practice code, set
+                    <code>HUB_BASE_URL</code> and <code>HUB_API_TOKEN</code> in your <code>.env</code>
+                    (ask your instructor), then press <strong>Refresh Gallery</strong>.
+                    You can still run tournaments with your own strategies and any you've saved locally.
+                </div>`;
+                const emptyStatus = document.getElementById(statusId);
+                if (emptyStatus) emptyStatus.innerText = 'Gallery empty — configure the Hub and Refresh.';
+                return;
+            }
 
             // Override the card-grid this container was originally styled with; our own grid lays
-            // out the three columns (classes keep the row layout from being broken by global CSS).
-            c.style.display = 'block';
+            // out the columns (classes keep the row layout from being broken by global CSS).
             c.innerHTML = `<div class="part-grid">
                 ${section('<i class="fas fa-users"></i> Players', playerRows, 'player')}
                 ${section('<i class="fas fa-robot"></i> Bots', botRows, 'bot')}
                 ${section('<i class="fas fa-graduation-cap"></i> Practice', practiceRows, 'practice')}
+                ${section('<i class="fas fa-floppy-disk"></i> Local', localRows, 'local')}
+            </div>
+            <div class="part-empty" style="padding:6px 2px; font-size:12px;">
+                Tick who competes. Only <strong>bots</strong> can be entered more than once — set a copy
+                count next to a bot. Use <strong>Toggle All</strong> to select/clear a whole column.
+                <strong>Local</strong> entries are strategies you saved on this machine.
             </div>`;
             const statusEl = document.getElementById(statusId);
-            if (statusEl) statusEl.innerText = `${playerRows.length} player · ${botRows.length} bot · ${practiceRows.length} practice`;
+            if (statusEl) statusEl.innerText = `${playerRows.length} player · ${botRows.length} bot · ${practiceRows.length} practice · ${localRows.length} local`;
         }
 
         // Toggle every checkbox in one section (or all, if no section given) for a mode.
@@ -1196,15 +1328,20 @@
             const out = [];
             document.querySelectorAll(`.part-check-${target}:checked`).forEach(cb => {
                 const p = cb.dataset.pool, idx = parseInt(cb.dataset.idx);
-                const s = (p === 'practice' ? pool.practice : pool.players)[idx];
+                const s = (p === 'practice' ? pool.practice : (p === 'local' ? LOCAL_STRATS : pool.players))[idx];
                 if (!s || !s.name || !s.code) return;
-                if (p === 'practice') {
+                if (p === 'local') {
+                    // A strategy saved on this machine; treat it like one of the user's own rows.
+                    out.push({ name: s.name, code: s.code, source: 'local' });
+                } else if (p === 'practice') {
                     out.push({ name: s.name, code: s.code, source: 'practice' });
                 } else if (cb.dataset.type === 'bot') {
                     const cntEl = document.getElementById(`cnt_${target}_${p}_${idx}`);
                     const count = Math.max(1, Math.min(50, parseInt(cntEl && cntEl.value) || 1));
                     for (let k = 0; k < count; k++) {
-                        out.push({ name: k === 0 ? s.name : `${s.name} (${k + 1})`, code: s.code,
+                        // Suffix with "_2", "_3", … (not " (2)") so replicated copies still pass
+                        // the strict strategy-name rule (letters/digits/space/_/-/' only).
+                        out.push({ name: k === 0 ? s.name : `${s.name}_${k + 1}`, code: s.code,
                                    source: 'website', website_id: s.id });
                     }
                 } else {
@@ -1226,8 +1363,9 @@
         }
 
 
-        window.onload = function() {
+        window.onload = async function() {
             loadDefaultStrategies();
+            await loadLocalGallery();   // populate LOCAL_STRATS before the checklists first render
             loadGallery('1v1', 'galleryContainer', 'galleryStatus');
             checkAuthStatus();
             // Init N-Player
@@ -1370,12 +1508,13 @@
             if (!confirmWorkload('nplayer', strategies.length, rounds, modes.length)) return;
 
             const payload = {
-                strategies, rounds, seed, group_size: groupSize, 
-                payoff_model: payoffModel, modes, 
-                discount_factor: discountFactor, stochastic_prob: stochasticProb
+                strategies, rounds, seed, group_size: groupSize,
+                payoff_model: payoffModel, modes,
+                discount_factor: discountFactor, stochastic_prob: stochasticProb,
+                isolated: document.getElementById('isolatedNp')?.checked || false
             };
 
-            document.getElementById('nplayerResults').innerHTML = '<div style="text-align: center; padding: 20px;"><i class="fas fa-spinner fa-spin"></i> Running N-Player tournament...</div>';
+            const spinner = runSpinner('nplayerResults', 'Running N-Player tournament', 'nplayerBtn');
 
             try {
                 const nplayerTournamentUrl = "{{ url_for('nplayer_tournament') }}";
@@ -1394,10 +1533,13 @@
                 }
 
                 displayNPlayerTournamentResults(result);
+                renderFlagsBanner('nplayerResults', result.flags);
                 showSubmitPanel('nplayer', result, roster);
             } catch(e) {
                 console.error(e);
                 document.getElementById('nplayerResults').innerHTML = `<div class="results" style="color: var(--danger-color);">Error running tournament</div>`;
+            } finally {
+                spinner.stop();
             }
         }
 
@@ -1613,7 +1755,7 @@
                                  { numCores, assignment: coreAssignmentMode, unlimited })) return;
 
             const payload = { strategies, num_cores: numCores, core_assignment_mode: coreAssignmentMode, scheduler, seed, unlimited };
-            document.getElementById('osResults').innerHTML = '<div style="text-align: center; padding: 20px;"><i class="fas fa-spinner fa-spin"></i> Running OS simulation...</div>';
+            const spinner = runSpinner('osResults', 'Running OS simulation', 'osSimBtn');
 
             try {
                 const response = await fetch('/os-simulation', {
@@ -1630,6 +1772,8 @@
             } catch (e) {
                 console.error(e);
                 document.getElementById('osResults').innerHTML = '<div class="results" style="color: var(--danger-color);">Error running OS simulation</div>';
+            } finally {
+                spinner.stop();
             }
         }
 

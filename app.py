@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, session, g
+from flask import Flask, render_template, request, jsonify, session, g, abort
 import json
 import random
 import ast
@@ -221,6 +221,11 @@ LOCAL_OWNER = {
 # provided in the local app config. Blank => the Hub is disabled (offline).
 HUB_API_TOKEN = os.environ.get('HUB_API_TOKEN', '').strip()
 
+# Website base URL (same value hub_client reads). Exposed to templates so the page can build
+# "open the website" handoff links (e.g. an admin adding a strategy to the shared gallery).
+# Blank => no website configured; the handoff buttons explain that instead of opening a bad URL.
+HUB_BASE_URL = os.environ.get('HUB_BASE_URL', '').strip().rstrip('/')
+
 app_logger = setup_logging(is_production=IS_PRODUCTION)
 
 app = Flask(__name__)
@@ -301,13 +306,33 @@ def _assign_csp_nonce():
     g.csp_nonce = secrets.token_urlsafe(16)
 
 
+# Loopback addresses that are allowed to reach the LOCAL_MODE app. The whole LOCAL_MODE trust
+# model assumes the app is only ever reached from the same machine (it auto-authenticates every
+# request as the local owner with NO credentials). This is the single place that assumption is
+# pinned down, so it still holds if the server is ever bound to 0.0.0.0 (e.g. `waitress-serve`
+# without --host).
+_LOOPBACK_ADDRS = frozenset({'127.0.0.1', '::1', 'localhost'})
+
+# Opt-in escape hatch: set ALLOW_LAN=true only if you deliberately want to reach this app from
+# another device AND understand that doing so grants that device the local owner's (admin) access.
+ALLOW_LAN = os.environ.get('ALLOW_LAN', '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+
 @app.before_request
-def _inject_local_owner():
-    """In LOCAL_MODE, log the single local owner in automatically so the existing
-    auth-gated UI works with no Firebase login. The auth decorators already
-    short-circuit in LOCAL_MODE; this just makes session['user'] present for the
-    many routes that read it directly. No-op when LOCAL_MODE is off."""
-    if LOCAL_MODE and 'user' not in session:
+def _enforce_local_only_and_inject_owner():
+    """In LOCAL_MODE, auto-authenticate the request as the single local owner so the auth-gated
+    UI works with no Firebase login, and make session['user'] present for the routes that read it.
+
+    Because that auto-login grants admin with no credentials, it is only safe on loopback. The
+    auth decorators here are no-ops (this is the credential-free student build), so if the server
+    were bound to 0.0.0.0 a LAN client could otherwise use the whole app as admin. Guard against
+    that by rejecting non-loopback requests outright (unless ALLOW_LAN is explicitly set). No-op
+    when LOCAL_MODE is off (then the real auth boundary — the website — applies)."""
+    if not LOCAL_MODE:
+        return
+    if request.remote_addr not in _LOOPBACK_ADDRS and not ALLOW_LAN:
+        abort(403)
+    if 'user' not in session:
         session['user'] = dict(LOCAL_OWNER)
 
 
@@ -319,8 +344,8 @@ def _inject_csp_nonce():
 
 @app.context_processor
 def _inject_modes():
-    """Expose LOCAL_MODE to templates."""
-    return {'LOCAL_MODE': LOCAL_MODE}
+    """Expose LOCAL_MODE and the configured website base URL to templates."""
+    return {'LOCAL_MODE': LOCAL_MODE, 'hub_base_url': HUB_BASE_URL}
 
 
 @app.after_request
@@ -402,9 +427,12 @@ def validate_name(name, field_type="name"):
     if any(ch in name for ch in ['\t', '\n', '\r']):
         return False, f"{field_type.capitalize()} contains invalid characters"
 
-    # For the default field_type ('name'), enforce a strict character set.
-    # This matches the regression tests for validate_name() directly.
-    if field_type == 'name':
+    # Enforce a strict character set for the names students actually choose (strategy/bot
+    # names) and the default field_type. The leaderboard, the N-Player groups list and the
+    # website gallery all render these names, so we keep them to letters, digits, spaces,
+    # underscore, hyphen and apostrophe — enough for "Hijab's strategy" or "house_bot_3",
+    # but no HTML/quote/ampersand characters. (Must stay in step with ipd-hub's validate_name.)
+    if field_type in ('name', 'strategy name', 'bot name'):
         if '&' in name or '"' in name:
             return False, f"{field_type.capitalize()} contains invalid characters"
         if not re.match(r"^[a-zA-Z0-9 _\-']+$", name):
@@ -427,6 +455,28 @@ def validate_name(name, field_type="name"):
         if re.search(pattern, name_lower):
             return False, f"{field_type.capitalize()} contains suspicious pattern"
     
+    return True, ""
+
+
+def _is_truthy(v):
+    """Interpret a JSON-ish flag (bool/str/int) as a boolean."""
+    return str(v).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def check_unique_strategy_names(strategies):
+    """Reject a roster that reuses a name. Names are the leaderboard key, so two strategies
+    sharing one name silently collapse into a single row (one quietly shadows the other) —
+    the UI's "Important Rules" promises names are unique, so enforce it here. Compares on the
+    stripped name to match how the engines key results. Returns (is_valid, error_message)."""
+    seen = set()
+    for strategy in strategies:
+        raw = strategy.get('name', '') if isinstance(strategy, dict) else ''
+        name = raw.strip() if isinstance(raw, str) else ''
+        key = name.lower()
+        if key in seen:
+            return False, (f"Duplicate strategy name: '{name}'. Each strategy must have a "
+                           f"different name (names are used to identify entries in the results).")
+        seen.add(key)
     return True, ""
 
 
@@ -1243,6 +1293,27 @@ def _write_practice_cache(strategies):
         json.dump(strategies, f)
 
 
+# Local personal gallery: strategies the user saves on THIS machine ("Save locally"). Unlike
+# the Hub caches above (which mirror the website), this is purely local and private — it never
+# leaves the machine and is git-ignored. It gives the "Save to Gallery" button something real to
+# do in the local app (the website-backed save it used to call lives only in ipd-hub now).
+LOCAL_GALLERY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'local_gallery.json')
+
+
+def _read_local_gallery():
+    try:
+        with open(LOCAL_GALLERY_PATH, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (FileNotFoundError, ValueError, OSError):
+        return []
+
+
+def _write_local_gallery(strategies):
+    with open(LOCAL_GALLERY_PATH, 'w', encoding='utf-8') as f:
+        json.dump(strategies, f)
+
+
 @app.route('/hub', methods=['GET'])
 @login_required
 def hub():
@@ -1307,7 +1378,10 @@ def hub_import(strategy_id):
     if not safe:
         return jsonify({'error': f'Imported strategy rejected by local sandbox: {error}'}), 400
 
-    return jsonify({'success': True, 'name': name, 'code': code})
+    # Pass through any admin flag so the page can warn before the user runs this strategy.
+    return jsonify({'success': True, 'name': name, 'code': code,
+                    'flagged': bool((record or {}).get('flagged', False)),
+                    'flag_reason': (record or {}).get('flag_reason', '')})
 
 
 _SMOKE_TEST_OPPONENT = "def AllC(last_moves, my_history, opponents_histories, meta):\n    return 'C'"
@@ -1334,16 +1408,105 @@ def hub_screen():
     safe, screen_err = is_safe_code(code)
     if not safe:
         return jsonify({'error': f'Screening failed: {screen_err}'}), 400
-    # Smoke test: run the strategy in a short match so faulty code (or a name that doesn't
-    # match the function) is caught locally before submission.
+    # Smoke test: run the strategy in a short match so faulty code is caught locally before
+    # submission. (The entry point is found by signature, not by name — the strategy name is
+    # just a display label — so the function need not share the name.)
     try:
         result = game(code, name, _SMOKE_TEST_OPPONENT, 'AllC', rounds=10, mode='standard', seed=1)
     except Exception as e:
         return jsonify({'error': f'Strategy crashed when run locally: {e}'}), 400
     if isinstance(result, dict) and result.get('winner') == 'Error':
-        return jsonify({'error': 'Strategy errored in a test match — make sure the function name '
-                                 'matches the strategy name and it returns "C"/"D", then re-run.'}), 400
+        return jsonify({'error': 'Strategy errored in a test match — make sure your code defines a '
+                                 'strategy function with the right signature that returns "C"/"D", '
+                                 'then re-run.'}), 400
     return jsonify({'ok': True})
+
+
+# --- Local personal gallery (save strategies on this machine) ------------------
+# The index page calls GET /check-auth on load to decide which save controls to show, and the
+# per-strategy "Save locally" button posts to /save-strategy. In the website build these lived
+# in ipd-hub; here they are backed by local_gallery.json so they work with no login or network.
+
+@app.route('/check-auth', methods=['GET'])
+@login_required
+@limiter.limit("60 per minute")
+def check_auth():
+    """Report login/admin state to the page. In the local app the single owner is always the
+    implicit admin (auth_utils stubs), so this is mostly used to show the right save controls."""
+    user = session.get('user') or {}
+    return jsonify({
+        'logged_in': bool(user.get('uid')),
+        'is_admin': is_admin(),
+        'local_mode': LOCAL_MODE,
+    })
+
+
+@app.route('/save-strategy', methods=['POST'])
+@login_required
+@limiter.limit("60 per minute")
+def save_strategy():
+    """Save a strategy to the user's private, machine-local gallery (local_gallery.json).
+    Screened with the same name + is_safe_code checks as a tournament entry. De-duped by name
+    (re-saving a name overwrites it). Never leaves this machine."""
+    data = request.get_json(silent=True) or {}
+    name = (data.get('name') or '').strip()
+    code = data.get('code') or ''
+
+    is_valid, name_err = validate_name(name, field_type="strategy name")
+    if not is_valid:
+        return jsonify({'error': f'Invalid strategy name: {name_err}'}), 400
+    if not code.strip():
+        return jsonify({'error': 'Strategy code is required.'}), 400
+    if len(code.encode('utf-8')) > MAX_STRATEGY_CODE_BYTES:
+        return jsonify({'error': f'Strategy exceeds the maximum allowed size '
+                                 f'({MAX_STRATEGY_CODE_BYTES} bytes).'}), 400
+    safe, screen_err = is_safe_code(code)
+    if not safe:
+        return jsonify({'error': f'Strategy failed the safety check: {screen_err}'}), 400
+
+    try:
+        gallery = _read_local_gallery()
+        gallery = [s for s in gallery if s.get('name') != name]   # overwrite same-named entry
+        gallery.append({
+            'id': 'local_' + sha256_text(name)[:16],
+            'name': name,
+            'code': code,
+            'type': 'local',
+            'source': 'local',
+        })
+        _write_local_gallery(gallery)
+    except OSError as e:
+        app.logger.error(f"Could not write local gallery: {e}")
+        return jsonify({'error': 'Could not save strategy — disk write failed.'}), 500
+
+    return jsonify({'success': True, 'message': f'Saved "{name}" to your local gallery.'})
+
+
+@app.route('/local-gallery/list', methods=['GET'])
+@login_required
+def local_gallery_list():
+    """Return the machine-local saved strategies (for the participant checklist / import)."""
+    return jsonify({'strategies': _read_local_gallery()})
+
+
+@app.route('/local-gallery/delete', methods=['POST'])
+@login_required
+@limiter.limit("60 per minute")
+def local_gallery_delete():
+    """Remove one strategy from the local gallery by id or name."""
+    data = request.get_json(silent=True) or {}
+    sid = data.get('id')
+    name = data.get('name')
+    if not sid and not name:
+        return jsonify({'error': 'Provide an id or name to delete.'}), 400
+    try:
+        gallery = _read_local_gallery()
+        kept = [s for s in gallery if s.get('id') != sid and s.get('name') != name]
+        _write_local_gallery(kept)
+    except OSError as e:
+        app.logger.error(f"Could not write local gallery: {e}")
+        return jsonify({'error': 'Could not update local gallery — disk write failed.'}), 500
+    return jsonify({'success': True, 'removed': len(gallery) - len(kept)})
 
 
 # Note: there is no local "publish" route. Strategy submission happens on the website
@@ -1698,6 +1861,24 @@ def run_tournament():
         if not is_valid:
             return jsonify({'error': f'Invalid strategy name: {error_message}'}), 400
 
+    # Names are the leaderboard key, so duplicates would silently collapse into one row.
+    is_unique, dupe_error = check_unique_strategy_names(strategies)
+    if not is_unique:
+        return jsonify({'error': dupe_error}), 400
+
+    # Optional isolated screening: run each strategy in a separate process with a wall-clock
+    # timeout first, so one that hangs (e.g. ReDoS in C) or crashes is flagged and excluded
+    # rather than stalling the whole tournament. Opt-in via `isolated` (admin "Run isolated").
+    screen_flags = []
+    isolated = _is_truthy(data.get('isolated'))
+    if isolated:
+        import isolation
+        survivors, screen_flags = isolation.screen_strategies(strategies)
+        if len(survivors) < 2:
+            return jsonify({'error': 'Isolated screening flagged too many strategies — fewer than 2 '
+                                     'remain to run.', 'flags': screen_flags, 'screened': True}), 400
+        strategies = survivors
+
     # Game modes (1v1 supports the same modes as N-player). Accept a `modes` list and
     # optional discount/stochastic params, validated the same way as /nplayer/tournament.
     allowed_modes = {'standard', 'discounted', 'stochastic', 'random'}
@@ -1739,6 +1920,9 @@ def run_tournament():
             discount_factor=discount_factor, stochastic_prob=stochastic_prob,
             seed=seed,
         )
+        if isolated:
+            tournament_result['flags'] = screen_flags
+            tournament_result['screened'] = True
         return jsonify(tournament_result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -1862,7 +2046,24 @@ def nplayer_tournament():
         is_valid, error_message = validate_name(strategy_name, field_type="strategy name")
         if not is_valid:
             return jsonify({'error': f'Invalid strategy name: {error_message}'}), 400
-    
+
+    # Names are the leaderboard key, so duplicates would silently collapse into one row.
+    is_unique, dupe_error = check_unique_strategy_names(strategies)
+    if not is_unique:
+        return jsonify({'error': dupe_error}), 400
+
+    # Optional isolated screening (opt-in via `isolated`): exclude + flag strategies that hang or
+    # crash in a separate process before the real run (see run_tournament for the rationale).
+    screen_flags = []
+    isolated = _is_truthy(data.get('isolated'))
+    if isolated:
+        import isolation
+        survivors, screen_flags = isolation.screen_strategies(strategies)
+        if len(survivors) < 2:
+            return jsonify({'error': 'Isolated screening flagged too many strategies — fewer than 2 '
+                                     'remain to run.', 'flags': screen_flags, 'screened': True}), 400
+        strategies = survivors
+
     # Parse and validate strategy code
     compiled_strategies = []
     for strategy in strategies:
@@ -2023,7 +2224,10 @@ def nplayer_tournament():
             # Add tournament_id to response
             result['tournament_id'] = tournament_id
             app.logger.info(f"N-player tournament persisted with ID: {tournament_id}")
-        
+
+        if isolated:
+            result['flags'] = screen_flags
+            result['screened'] = True
         return jsonify(result)
     except Exception as e:
         app.logger.error(f"N-player tournament error: {str(e)}")
@@ -2220,6 +2424,11 @@ def os_simulation():
         if not safe:
             return jsonify({'error': f'Strategy "{name}" failed safety check: {err}'}), 400
         clean.append({'name': name, 'code': code})
+
+    # Names identify entries in the ranking, so duplicates would collapse into one.
+    is_unique, dupe_error = check_unique_strategy_names(clean)
+    if not is_unique:
+        return jsonify({'error': dupe_error}), 400
 
     # Core-sim parameters.
     try:

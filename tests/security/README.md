@@ -1,126 +1,44 @@
-# Security Tests - Phase 7.1: Authentication & Authorization Security Tests
+# Security tests — sandbox hardening
 
-This directory contains penetration testing tests that attempt to bypass authentication and authorization controls. These tests verify that the application properly blocks common attack vectors.
+This directory holds the regression tests for the **sandbox that runs untrusted student
+strategy code** in this (local student) app. There is no authentication, Firebase, or
+session layer to test here — `auth_utils.py`, `audit_utils.py` and `firebase_config.py` are
+intentional no-op stubs in `ipd-app` (all of that lives in the separate website repo,
+`ipd-hub`). The only thing worth penetration-testing in this repo is `is_safe_code()` and the
+runtime guards around strategy execution.
 
-## Test Philosophy
+## What's covered
 
-These tests follow the principle: **Tests PASS when attacks are BLOCKED**.
+**`test_sandbox_hardening.py`** (the only test file here) exercises the two in-process
+static defenses in `is_safe_code()` (app.py). These exist because the PythonAnywhere free
+tier can't spawn a subprocess for OS-level isolation, so the screen has to catch these
+patterns statically:
 
-- ✅ **PASSING test** = Attack was blocked (system is secure)
-- ❌ **FAILING test** = Attack succeeded (vulnerability exists)
+- **String-based attribute traversal** — `str.format` / `str.format_map` and
+  `string.Formatter` field syntax (`"{0.__class__.__init__.__globals__}".format(obj)`) can
+  hide dunder names inside *string literals*, where the AST attribute check can't see them.
+  These method-call forms are rejected; f-strings and ordinary (non-dunder) attribute access
+  stay allowed.
+- **Statically-detectable memory bombs** — huge integer/string literals, oversized sequence
+  multiplication (`[0] * 10**9`), digit-exploding exponentiation (`10**10**8`), and
+  `int()` / `range()` on a huge constant. Benign arithmetic such as a bare `2**32` scale
+  factor or `[0] * 100` must still pass (there are explicit regression cases for real
+  strategies that use these).
 
-## Test Files
+Each test follows the convention: **it PASSES when the dangerous construct is rejected and
+benign code is still allowed.**
 
-### test_authentication_security.py (15 tests)
-Tests authentication mechanisms and token validation:
-- Expired token rejection
-- Malformed token rejection
-- Missing token rejection
-- Revoked token blocking (via sessions_revoked_at)
-- Suspended user blocking
-- Unapproved user blocking
-- Logout session clearing
-- Rate limiting enforcement
-- Session data safety
-- Audit logging of failed attempts
+## Related defenses (tested elsewhere / by inspection)
 
-### test_authorization_security.py (12 tests)
-Tests authorization controls and privilege escalation:
-- @login_required decorator enforcement
-- @admin_required decorator enforcement
-- Admin route access control
-- Session manipulation attempts
-- Role verification from Firestore (not session)
-- User data isolation
-- Real-time role verification
-- API authentication requirements
+- The runtime guards — `_guarded_getattr/_setattr/_delattr/_hasattr`, the restricted
+  `_SANDBOX_BUILTINS`, the `__import__` allow-list, and the `run_with_limit` instruction
+  cap — live in `app.py` / `core_simulation.py` / `n_player_simulation.py`.
+- The optional **isolated run mode** (worker-process execution with a wall-clock timeout
+  that flags strategies which hang or crash) is covered by `tests/security/test_isolation.py`.
 
-### test_session_security.py (10 tests)
-Tests session management security:
-- HttpOnly flag on session cookies
-- SameSite=Lax flag on session cookies
-- Secure flag in production
-- Session tampering protection
-- Session revocation mechanism
-- Minimal session data storage
-- Session regeneration after login
-- Session clearing on logout
-- No session leakage in errors
-- Session timeout configuration
+## Running
 
-## Running Tests
-
-Run all security tests:
 ```bash
-python -m pytest tests/security/ -v
+RUN_TOURNAMENTS_SYNC=true FLASK_ENV=development FLASK_SECRET_KEY=test \
+    python -m pytest tests/security -q
 ```
-
-Run specific test file:
-```bash
-python -m pytest tests/security/test_authentication_security.py -v
-```
-
-Run specific test:
-```bash
-python -m pytest tests/security/test_authentication_security.py::TestAuthenticationSecurity::test_expired_token_rejected -v
-```
-
-## Test Results Summary
-
-**Phase 7.1 Complete: ✅ 40/40 tests PASSING**
-
-All authentication and authorization attacks are successfully blocked:
-- ✅ 15/15 authentication security tests passing
-- ✅ 12/12 authorization security tests passing
-- ✅ 10/10 session security tests passing
-
-## Security Features Verified
-
-### Authentication Security ✅
-- Expired Firebase tokens rejected with 401
-- Malformed tokens rejected
-- Missing tokens rejected
-- Revoked sessions blocked (sessions_revoked_at mechanism)
-- Suspended users (disabled=True) blocked
-- Unapproved users blocked
-- Logout clears all session data
-- Rate limiting enforced (5 requests per minute)
-- Safe session data (no sensitive info in session)
-- Failed auth attempts handled gracefully
-
-### Authorization Security ✅
-- @login_required blocks unauthenticated access
-- @admin_required blocks non-admin users
-- Session manipulation cannot escalate privileges
-- Roles verified from Firestore on each request (not cached)
-- Admin routes properly protected
-- API endpoints require authentication
-- Real-time role verification prevents stale permissions
-
-### Session Security ✅
-- Session cookies have HttpOnly flag (XSS protection)
-- Session cookies have SameSite=Lax flag (CSRF protection)
-- Secure flag enabled in production (HTTPS-only)
-- Session data tampering detected (Flask signature verification)
-- Session revocation mechanism works correctly
-- Minimal data stored in session (UID, email, role only)
-- Sessions cleared completely on logout
-- No session leakage in error messages
-- Session timeout configured (31 days)
-
-## Known Issues / Notes
-
-None - all security controls are functioning as expected.
-
-## Next Steps
-
-- **Phase 7.2**: Admin Controls Security Tests (suspend/unsuspend/revoke bypass attempts)
-- **Phase 7.3**: Input Validation Security Tests (XSS, injection, code execution)
-- **Phase 7.4**: File Operations Security Tests (path traversal, arbitrary file access)
-- **Phase 7.5**: Audit Logging Security Tests (log tampering, evasion)
-
-## References
-
-- Plan: [plans/pentest-baseline-phase-7-plan.md](../../plans/pentest-baseline-phase-7-plan.md)
-- Auth utilities: [auth_utils.py](../../auth_utils.py)
-- Main application: [app.py](../../app.py)
