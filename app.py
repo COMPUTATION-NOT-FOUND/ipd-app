@@ -485,7 +485,7 @@ def check_unique_strategy_names(strategies):
 def _screening_shortfall(flags):
     """400 response when screening leaves fewer than 2 strategies; `flags` names each one and why."""
     n = len(flags)
-    return jsonify({'error': f"Screening left out {n} {'strategy' if n == 1 else 'strategies'} "
+    return jsonify({'error': f"Sandbox mode left out {n} {'strategy' if n == 1 else 'strategies'} "
                              f"(see below for which and why), so fewer than 2 remain to run.",
                     'flags': flags, 'screened': True}), 400
 
@@ -1849,9 +1849,9 @@ def run_tournament():
     if not is_unique:
         return jsonify({'error': dupe_error}), 400
 
-    # Optional isolated screening: run each strategy in a separate process with a wall-clock
+    # Optional sandbox mode (isolated screening): run each strategy in a separate process with a wall-clock
     # timeout first, so one that hangs (e.g. ReDoS in C) or crashes is flagged and excluded
-    # rather than stalling the whole tournament. Opt-in via `isolated` (admin "Run isolated").
+    # rather than stalling the whole tournament. Opt-in via `isolated` ("Run in sandbox mode").
     screen_flags = []
     isolated = _is_truthy(data.get('isolated'))
     if isolated:
@@ -2034,7 +2034,7 @@ def nplayer_tournament():
     if not is_unique:
         return jsonify({'error': dupe_error}), 400
 
-    # Optional isolated screening (opt-in via `isolated`): exclude + flag strategies that hang or
+    # Optional sandbox mode (opt-in via `isolated`): exclude + flag strategies that hang or
     # crash in a separate process before the real run (see run_tournament for the rationale).
     screen_flags = []
     isolated = _is_truthy(data.get('isolated'))
@@ -2443,10 +2443,28 @@ def os_simulation():
     if not isinstance(unlimited, bool):
         return jsonify({'error': 'unlimited must be a boolean'}), 400
 
+    # Optional sandbox mode (same as 1v1 / N-Player): test-run each strategy in a separate,
+    # time-limited process first and leave out any that hang or crash. Done after the cheap
+    # parameter checks so a bad form value is reported without waiting for the screen.
+    screen_flags = []
+    isolated = _is_truthy(data.get('isolated'))
+    if isolated:
+        import isolation
+        clean, screen_flags = isolation.screen_strategies(clean)
+        if len(clean) < 2:
+            return _screening_shortfall(screen_flags)
+        if core_assignment_mode == 'heterogeneous':
+            het_error = _heterogeneous_combination_error(num_cores, len(clean))
+            if het_error:
+                return jsonify({'error': het_error, 'flags': screen_flags, 'screened': True}), 400
+
     try:
         result = run_standalone_core_simulation(
             clean, num_cores=num_cores, scheduler=scheduler,
             core_assignment_mode=core_assignment_mode, seed=seed, unlimited=unlimited)
+        if isolated:
+            result['flags'] = screen_flags
+            result['screened'] = True
         return jsonify(result)
     except Exception as e:
         app.logger.error(f"Standalone OS simulation error: {e}")

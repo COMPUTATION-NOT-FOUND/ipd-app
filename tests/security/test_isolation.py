@@ -50,3 +50,25 @@ def test_screen_roster_excludes_and_flags():
     assert by_name['ReDoS']['reason'] == 'timeout'
     # website_id must round-trip so the flag can be applied on the website.
     assert by_name['ReDoS']['website_id'] == 'w-redos'
+
+
+def test_os_simulation_sandbox_mode_leaves_out_a_crashing_strategy(client):
+    """Sandbox mode on the OS Simulation tab: the crashing strategy is flagged and excluded, the
+    rest still run (the toggle used to exist only on 1v1 / N-Player)."""
+    resp = client.post('/os-simulation', json={
+        'strategies': [GOOD, ALLD, CRASH], 'num_cores': 2, 'scheduler': 'round_robin',
+        'core_assignment_mode': 'homogeneous', 'seed': 1, 'isolated': True})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data['screened'] is True
+    assert [f['name'] for f in data['flags']] == ['Boom']
+    assert set(data['core_simulation_results']['strategies']) == {'Good', 'AllD'}
+
+
+def test_sandbox_shortfall_names_how_many_were_left_out(client):
+    resp = client.post('/os-simulation', json={
+        'strategies': [GOOD, CRASH], 'num_cores': 2, 'isolated': True})
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert data['error'].startswith('Sandbox mode left out 1 strategy ')
+    assert [f['name'] for f in data['flags']] == ['Boom']

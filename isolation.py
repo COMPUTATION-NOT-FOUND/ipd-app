@@ -14,8 +14,8 @@ real tournament runs. A strategy that hangs (timeout), raises, or errors in a sh
 reported so the caller can exclude and flag it. Killing a *process* reliably stops a C-level hang
 that ``settrace`` cannot interrupt, and it pins the blame on the exact strategy.
 
-It is opt-in: normal practice runs stay in-process and fast. The admin "Run isolated" option on a
-tournament turns it on (used when running the official tournament over untrusted student code).
+It is opt-in: normal practice runs stay in-process and fast. The "Run in sandbox mode" option on
+the 1v1, N-Player and OS Simulation tabs turns it on (recommended for strategies you didn't write).
 """
 import multiprocessing as mp
 import os

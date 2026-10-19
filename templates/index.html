@@ -232,9 +232,10 @@
         <div style="text-align: center; margin-top: 30px;">
             <button data-action="startTournament" id="tournamentBtn" style="background: var(--success-color); color: var(--color-paper); font-size: 1.1em; padding: 15px 30px;"><i class="fas fa-play"></i> Start Round Robin Tournament</button>
             <div style="margin-top: 10px; font-size: 13px;">
-                <label title="Screen every strategy in a separate process with a time limit first, so one that hangs or crashes is flagged and left out instead of stalling the run. Recommended when running over untrusted strategies.">
-                    <input type="checkbox" id="isolated1v1" style="width:auto;"> Run isolated (screen &amp; flag slow/broken strategies)
+                <label class="check-row" style="justify-content: center;" title="Before the run, each strategy is test-played in a separate process with a time limit. Any that hang or crash are left out and named, instead of stalling the run. Recommended for strategies you didn't write.">
+                    <input type="checkbox" id="isolated1v1"> Run in sandbox mode
                 </label>
+                <small style="color: var(--text-secondary);">Test-runs every strategy in a separate, time-limited process first and leaves out any that hang or crash. Takes a few seconds longer.</small>
             </div>
         </div>
 
@@ -389,9 +390,10 @@
                 <i class="fas fa-play"></i> Start N-Player Tournament
              </button>
              <div style="margin-top: 10px; font-size: 13px;">
-                <label title="Screen every strategy in a separate process with a time limit first, so one that hangs or crashes is flagged and left out instead of stalling the run. Recommended when running over untrusted strategies.">
-                    <input type="checkbox" id="isolatedNp" style="width:auto;"> Run isolated (screen &amp; flag slow/broken strategies)
+                <label class="check-row" style="justify-content: center;" title="Before the run, each strategy is test-played in a separate process with a time limit. Any that hang or crash are left out and named, instead of stalling the run. Recommended for strategies you didn't write.">
+                    <input type="checkbox" id="isolatedNp"> Run in sandbox mode
                 </label>
+                <small style="color: var(--text-secondary);">Test-runs every strategy in a separate, time-limited process first and leaves out any that hang or crash. Takes a few seconds longer.</small>
              </div>
         </div>
     </div>
@@ -548,6 +550,12 @@
             <button data-action="startOSSimulation" id="osSimBtn" style="background: var(--success-color); color: var(--color-paper); padding: 15px 30px; font-size: 1.1em;">
                 <i class="fas fa-microchip"></i> Run OS Simulation
             </button>
+            <div style="margin-top: 10px; font-size: 13px;">
+                <label class="check-row" style="justify-content: center;" title="Before the run, each strategy is test-played in a separate process with a time limit. Any that hang or crash are left out and named, instead of stalling the run. Recommended for strategies you didn't write.">
+                    <input type="checkbox" id="isolatedOs"> Run in sandbox mode
+                </label>
+                <small style="color: var(--text-secondary);">Test-runs every strategy in a separate, time-limited process first and leaves out any that hang or crash. Takes a few seconds longer.</small>
+            </div>
         </div>
     </div>
 
@@ -614,7 +622,7 @@
         }
 
         // Show a failed run: the server's message plus every per-strategy detail it sent
-        // (disqualified by the safety check, flagged by screening), then scroll it into view so
+        // (disqualified by the safety check, left out by sandbox mode), then scroll it into view so
         // the user sees it right after pressing Start.
         function showRunError(containerId, result, fallbackMsg) {
             const el = document.getElementById(containerId);
@@ -624,7 +632,7 @@
             el.innerHTML = `<div class="results" style="border-left: 4px solid var(--danger-color);">
                     <p style="color: var(--danger-color); margin-top: 0;"><i class="fas fa-times-circle"></i> ${escHtml(msg)}</p>
                     ${strategyIssuesHtml('Disqualified by the safety check', r.disqualified, '--danger-color')}
-                    ${strategyIssuesHtml('Left out by screening', r.flags, '--warning-color')}
+                    ${strategyIssuesHtml('Left out by sandbox mode', r.flags, '--warning-color')}
                 </div>`;
             el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
@@ -829,7 +837,7 @@
             } };
         }
 
-        // After an isolated run, show which strategies were screened out (and why) at the top of
+        // After a sandbox-mode run, show which strategies were screened out (and why) at the top of
         // the results. `flags` is [{name, reason, detail}]; absent/empty when nothing was flagged.
         function renderFlagsBanner(containerId, flags) {
             const el = document.getElementById(containerId);
@@ -841,7 +849,7 @@
             el.insertAdjacentHTML('afterbegin',
                 `<div class="results" style="border:1px solid var(--warning-color); background: rgba(234,179,8,0.10); margin-bottom:16px;">
                     <h4 style="margin:0 0 8px 0; color: var(--warning-color);">
-                        <i class="fas fa-flag"></i> ${plural(flags.length, 'strategy', 'strategies')} flagged and left out by screening</h4>
+                        <i class="fas fa-flag"></i> ${plural(flags.length, 'strategy', 'strategies')} left out by sandbox mode</h4>
                     <ul style="margin:0 0 0 18px;">${rows}</ul>
                 </div>`);
         }
@@ -901,7 +909,7 @@
             // Only your own local players are registered as bots. Player submissions and organizer
             // practice strategies are already known on the website, so they are NOT re-registered.
             const locals = (roster || []).filter(r => r.source === 'local').length;
-            // Flags from isolated screening that can be matched to a website strategy (have an id).
+            // Flags from sandbox mode that can be matched to a website strategy (have an id).
             const flaggable = (Array.isArray(result && result.flags) ? result.flags : [])
                 .filter(f => f.website_id);
             const flagNote = flaggable.length
@@ -941,7 +949,7 @@
             // strategies and player submissions are NOT re-registered as bots.
             const local_bots = (roster || []).filter(r => r.source === 'local')
                 .map(r => ({ name: r.name, code: r.code }));
-            // Carry any isolated-screening flags so the admin can flag these strategies on the
+            // Carry any sandbox-mode flags so the admin can flag these strategies on the
             // website when they confirm the publish (only those with a website_id can be matched).
             const flags = Array.isArray(result && result.flags) ? result.flags : [];
             const pkg = { kind, name, result, participants, local_bots, flags };
@@ -1296,8 +1304,8 @@
                 const count = isBot
                     ? `<input type="number" min="1" max="50" value="1" id="cnt_${target}_${p}_${idx}" title="Copies in this tournament">`
                     : '';
-                // Strategies an admin flagged via isolated screening carry a warning so classmates
-                // know this one hung/crashed when run in isolation.
+                // Strategies an admin flagged via sandbox mode carry a warning so classmates
+                // know this one hung/crashed when run in the sandbox.
                 const flag = s.flagged
                     ? ` <i class="fas fa-flag" style="color:var(--warning-color);" title="Flagged by an admin${s.flag_reason ? ' (' + galleryEscape(s.flag_reason) + ')' : ''}"></i>`
                     : '';
@@ -1827,7 +1835,8 @@
             if (!confirmWorkload('os', strategies.length, 0, 0,
                                  { numCores, assignment: coreAssignmentMode, unlimited })) return;
 
-            const payload = { strategies, num_cores: numCores, core_assignment_mode: coreAssignmentMode, scheduler, seed, unlimited };
+            const payload = { strategies, num_cores: numCores, core_assignment_mode: coreAssignmentMode, scheduler, seed, unlimited,
+                              isolated: document.getElementById('isolatedOs')?.checked || false };
             const spinner = runSpinner('osResults', 'Running OS simulation', 'osSimBtn');
 
             try {

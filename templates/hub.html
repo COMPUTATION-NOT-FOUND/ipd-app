@@ -193,7 +193,7 @@
                 if (data.flagged) {
                     showMsg('Imported "' + data.name + '" — ⚠ an admin FLAGGED this strategy'
                         + (data.flag_reason ? ' (' + data.flag_reason + ')' : '')
-                        + '. It passed the local sandbox but hung or errored when screened in isolation.', false, 'importMsg');
+                        + '. It passed the local sandbox but hung or errored when run in sandbox mode.', false, 'importMsg');
                 } else {
                     showMsg('Imported "' + data.name + '" — passed the local sandbox.', true, 'importMsg');
                 }
