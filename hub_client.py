@@ -48,7 +48,8 @@ def _require_enabled():
 
 
 def list_strategies():
-    """Return the submitted strategies as a list of {id, name, code, author}."""
+    """Return the submitted strategies as a list of {id, name, code, type, flagged, ...}.
+    (The website no longer sends author names: every student holds the class token.)"""
     _require_enabled()
     try:
         resp = requests.get(f'{HUB_BASE_URL}/api/strategies', headers=_headers(), timeout=_TIMEOUT)
@@ -63,7 +64,7 @@ def list_strategies():
 
 
 def list_practice_strategies():
-    """Return organizer-provided PRACTICE strategies as [{id, name, code, author}]."""
+    """Return organizer-provided PRACTICE strategies as [{id, name, code}]."""
     _require_enabled()
     try:
         resp = requests.get(f'{HUB_BASE_URL}/api/practice-strategies', headers=_headers(), timeout=_TIMEOUT)
