@@ -80,6 +80,18 @@ function osPickMetrics(src) {
     };
 }
 
+// The 95% confidence-interval half-widths that come with averaged runs (absent for a single run
+// or for results published before averaging existed), under the same short names as osPickMetrics.
+function osPickCI(src) {
+    const ci = (src && src.ci) || {};
+    const pick = (a, b) => (ci[a] != null ? ci[a] : (ci[b] != null ? ci[b] : null));
+    return {
+        throughput: pick('throughput'), wait: pick('wait_time', 'avg_waiting'),
+        turnaround: pick('turnaround', 'avg_turnaround'), response: pick('response', 'avg_response'),
+        cache: pick('cache_misses', 'avg_cache_misses'), makespan: pick('makespan'), coop: pick('coop_rate'),
+    };
+}
+
 // Build a uniform list of entries for a given `profile` ('avg' or a workload name) from either
 // the heterogeneous combinations or the homogeneous per-strategy results.
 function simEntries(sim, profile) {
@@ -89,14 +101,14 @@ function simEntries(sim, profile) {
     if (het && Array.isArray(het.results) && het.results.length) {
         return het.results.map(r => {
             const src = (useProf && r.workloads && r.workloads[profile]) ? r.workloads[profile] : r;
-            return Object.assign({ label: Object.keys(r.combination || {}).join(' + ') }, osPickMetrics(src));
+            return Object.assign({ label: Object.keys(r.combination || {}).join(' + '), ci: osPickCI(src) }, osPickMetrics(src));
         });
     }
     const homo = sim.core_simulation_results;
     if (homo && homo.strategies) {
         return Object.entries(homo.strategies).map(([name, d]) => {
             const src = (useProf && d.workloads && d.workloads[profile]) ? d.workloads[profile] : (d.avg || {});
-            return Object.assign({ label: name }, osPickMetrics(src));
+            return Object.assign({ label: name, ci: osPickCI(src) }, osPickMetrics(src));
         });
     }
     return [];
@@ -110,7 +122,7 @@ function simBaselineEntry(sim, profile) {
     if (!b) return null;
     const src = (profile !== 'avg' && b.workloads && b.workloads[profile]) ? b.workloads[profile] : (b.avg || {});
     const schedLabel = OS_SIM_SCHEDULER_LABELS[b.scheduler] || b.scheduler || 'scheduler';
-    return Object.assign({ label: 'Baseline · plain ' + schedLabel, isBaseline: true }, osPickMetrics(src));
+    return Object.assign({ label: 'Baseline · plain ' + schedLabel, isBaseline: true, ci: osPickCI(src) }, osPickMetrics(src));
 }
 
 // Theme colors are read at render time via srToken/srPalette/srAlpha (static/js/theme.js),
@@ -272,6 +284,12 @@ function buildSimTable(sim, profile) {
     const rawEntries = simEntries(sim, profile);
     const entries = isHet ? rawEntries : rawEntries.slice().sort((a, b) => b.throughput - a.throughput);
     const baseline = simBaselineEntry(sim, profile);
+    // A value with its +/- range (95% confidence interval) when the result averages several runs.
+    const cell = (e, k, digits, suffix) => {
+        const v = e[k].toFixed(digits) + (suffix || '');
+        const ci = e.ci && e.ci[k];
+        return ci != null ? `${v} <small style="color:var(--text-secondary); white-space:nowrap;">&plusmn;${ci.toFixed(digits)}</small>` : v;
+    };
     const down = '<i class="fas fa-arrow-down" style="font-size:0.7em"></i>';
     const up = '<i class="fas fa-arrow-up" style="font-size:0.7em"></i>';
 
@@ -294,24 +312,24 @@ function buildSimTable(sim, profile) {
         html += `<tr class="${idx === 0 ? 'rank-1' : ''}">
             <td>${isHet ? '<strong>' + (idx + 1) + '</strong>' : ''}</td>
             <td>${nameCell}</td>
-            <td><strong style="color:var(--primary-muted);">${e.throughput.toFixed(2)}</strong></td>
-            <td>${e.wait.toFixed(2)}</td>
-            <td>${e.turnaround.toFixed(2)}</td>
-            <td>${e.response.toFixed(2)}</td>
-            <td>${e.makespan.toFixed(2)}</td>
-            <td>${e.cache.toFixed(1)}</td>
-            <td>${e.coop.toFixed(1)}%</td>
+            <td><strong style="color:var(--primary-muted);">${cell(e, 'throughput', 2)}</strong></td>
+            <td>${cell(e, 'wait', 2)}</td>
+            <td>${cell(e, 'turnaround', 2)}</td>
+            <td>${cell(e, 'response', 2)}</td>
+            <td>${cell(e, 'makespan', 2)}</td>
+            <td>${cell(e, 'cache', 1)}</td>
+            <td>${cell(e, 'coop', 1, '%')}</td>
         </tr>`;
     });
     if (baseline) {
         html += `<tr style="border-top:2px solid var(--border-color); color:var(--text-secondary);">
             <td></td><td><em>${osSimEsc(baseline.label)}</em></td>
-            <td><strong>${baseline.throughput.toFixed(2)}</strong></td>
-            <td>${baseline.wait.toFixed(2)}</td>
-            <td>${baseline.turnaround.toFixed(2)}</td>
-            <td>${baseline.response.toFixed(2)}</td>
-            <td>${baseline.makespan.toFixed(2)}</td>
-            <td>${baseline.cache.toFixed(1)}</td>
+            <td><strong>${cell(baseline, 'throughput', 2)}</strong></td>
+            <td>${cell(baseline, 'wait', 2)}</td>
+            <td>${cell(baseline, 'turnaround', 2)}</td>
+            <td>${cell(baseline, 'response', 2)}</td>
+            <td>${cell(baseline, 'makespan', 2)}</td>
+            <td>${cell(baseline, 'cache', 1)}</td>
             <td>&mdash;</td>
         </tr>`;
     }
@@ -390,6 +408,33 @@ function renderOSSimulation(container, sim, opts) {
             (${((hetEvaluated / hetTotal) * 100).toFixed(1)}%), chosen at random${hetSeedNote}.
             The ranking below is over that sample, so <strong>the top mixture is not provably the best</strong>
             &mdash; an unevaluated assignment may beat it. Re-run with limits removed to sweep the whole space.
+        </div>`;
+    }
+
+    // What the numbers were averaged over, and whether the setup overloads the cores.
+    const runInfo = (isHet ? hetSim : homoSim) || {};
+    if (runInfo.runs) {
+        const seeds = Array.isArray(runInfo.seeds) ? runInfo.seeds : [];
+        const seedText = seeds.length > 1 ? `seeds ${seeds[0]}–${seeds[seeds.length - 1]}`
+                                          : (seeds.length ? `seed ${seeds[0]}` : '');
+        const warm = runInfo.warmup ? `, first ${Math.round(runInfo.warmup * 100)}% of tasks left out as warm-up` : '';
+        html += `<p style="color:var(--text-secondary); font-size:0.9em; margin: 0 0 14px;">
+            <i class="fas fa-layer-group"></i>
+            ${runInfo.runs > 1 ? `Averaged over ${runInfo.runs} runs (${osSimEsc(seedText)})` : `One run (${osSimEsc(seedText)})`},
+            ${osSimEsc(runInfo.num_processes || 50)} tasks per workload${warm}.
+            ${runInfo.runs > 1 ? '&plusmn; is a 95% confidence interval: the true average is very likely within that range, so rows whose ranges overlap are not clearly different.' : 'Average several runs for a fairer comparison.'}
+        </p>`;
+    }
+    const over = Array.isArray(runInfo.overloaded_workloads) ? runInfo.overloaded_workloads : [];
+    if (over.length) {
+        const base = (runInfo.baseline && runInfo.baseline.workloads) || {};
+        const loads = over.map(wl => `${osSimEsc(wl)}${base[wl] && base[wl].load != null ? ' (' + Math.round(base[wl].load * 100) + '%)' : ''}`).join(', ');
+        html += `
+        <div style="background: color-mix(in srgb, var(--warning-color) 12%, transparent); border: 1px solid color-mix(in srgb, var(--warning-color) 35%, transparent); color: var(--text-primary); padding: 12px 15px; border-radius: var(--radius-sm); margin-bottom: 18px;">
+            <strong style="color: var(--warning-color);"><i class="fas fa-triangle-exclamation"></i> The cores can't keep up:</strong>
+            in ${loads} the tasks need more CPU time than ${numCores} cores can give (load above 100%), so
+            the queue keeps growing. Waiting and turnaround times then mostly reflect how many tasks you
+            simulated rather than the scheduler. To compare normal running, add cores.
         </div>`;
     }
 

@@ -1,5 +1,6 @@
 import random
 import math
+import statistics
 import itertools
 import time
 from cache_model import build_core_hierarchies
@@ -269,7 +270,17 @@ BURSTY_BURST_MEDIAN, BURSTY_BURST_SIGMA = 35.0, 0.55
 WORKING_SET_MEDIAN, WORKING_SET_SIGMA = 4096.0, 0.5
 WORKING_SET_MIN, WORKING_SET_MAX = 1024, 32768
 
-MAX_SIM_TICKS = 5000
+MAX_SIM_TICKS = 5000           # minimum tick cap; the cap grows with the task count
+TICKS_PER_TASK_CAP = 150       # cap = max(MAX_SIM_TICKS, 150 x tasks): 400 tasks on 2 cores need ~25k
+
+# Options offered for the OS simulation (validated by the /os-simulation route).
+TASK_COUNT_CHOICES = (50, 100, 200, 400)   # tasks per workload in one run
+WARMUP_CHOICES = (0.0, 0.1, 0.2)           # share of earliest tasks left out of the averages
+MAX_RUNS = 30                              # seeded runs averaged per configuration
+OVERLOAD = 1.0                             # load above this = the queue keeps growing (see _calculate_metrics)
+
+# Cache misses an access incurs, by the level that finally served it (L1 hit = 0 misses).
+_MISSES_BY_HIT_LEVEL = {'L1': 0, 'L2': 1, 'L3': 2, 'memory': 3}
 
 
 def _clamped_lognormal(rng, median, sigma, lo, hi):
@@ -321,7 +332,7 @@ class OSSimulator:
     """
 
     def __init__(self, workload_type, core_strategies, scheduler='round_robin',
-                 seed=None, num_cores=2, record_trace=False, fixed_move=None):
+                 seed=None, num_cores=2, record_trace=False, fixed_move=None, warmup_fraction=0.0):
         if len(core_strategies) != num_cores:
             raise ValueError(f"core_strategies must have {num_cores} strategies, got {len(core_strategies)}")
 
@@ -330,14 +341,26 @@ class OSSimulator:
         # When set (e.g. 'D'), cores skip their PD strategy and always play this move, so the
         # scheduler runs in its textbook ("vanilla") form. Used to produce the baseline run.
         self.fixed_move = fixed_move
-        self.rng = random.Random(seed) if seed is not None else random
+        # Share of the earliest-arriving tasks left out of the per-task averages (warm-up: they
+        # meet an empty system, so they are served unusually fast). 0 = measure every task.
+        self.warmup_fraction = max(0.0, min(0.5, float(warmup_fraction or 0.0)))
+
+        # Separate random streams, all derived from the seed (one is picked when none is given).
+        # The task list, the scheduler and the strategies' meta['rng'] each draw from their own
+        # stream, and every task gets its own memory-access stream (see generate_workload). So on a
+        # given seed every strategy faces the same tasks AND each task makes the same memory
+        # accesses, however the strategy schedules it or uses randomness itself. (With one shared
+        # stream, a strategy drawing random numbers shifted every later memory access.)
+        self.seed = seed if seed is not None else random.randrange(1, 2 ** 31)
+        self.task_rng = random.Random(f"{self.seed}:tasks")
+        self.rng = random.Random(f"{self.seed}:strategy")     # handed to strategies as meta['rng']
         self.cores = [Core(i, core_strategies[i]) for i in range(num_cores)]
 
         self.scheduler = scheduler if not isinstance(scheduler, str) \
-            else build_scheduler(scheduler, num_cores, self.rng)
+            else build_scheduler(scheduler, num_cores, random.Random(f"{self.seed}:scheduler"))
         self.scheduler_name = getattr(self.scheduler, 'name', str(scheduler))
 
-        self.cache_hierarchies = build_core_hierarchies(self.rng, num_cores)
+        self.cache_hierarchies = build_core_hierarchies(random.Random(f"{self.seed}:cache"), num_cores)
 
         # Per-core PD move history and the contention ("opponent") history it saw.
         self.core_moves = [[] for _ in range(num_cores)]
@@ -345,6 +368,7 @@ class OSSimulator:
 
         self.completed_processes = []
         self.all_processes = []
+        self.busy_ticks = 0          # core-ticks spent running a task (for the load figure)
         self.time = 0
         self.max_time = MAX_SIM_TICKS
 
@@ -359,29 +383,29 @@ class OSSimulator:
             # Regular, evenly-spaced arrivals with a light-tailed (flat) burst range.
             for i in range(count):
                 procs.append(Process(i, i * UNIFORM_ARRIVAL_INTERVAL,
-                                     self.rng.randint(UNIFORM_BURST_MIN, UNIFORM_BURST_MAX)))
+                                     self.task_rng.randint(UNIFORM_BURST_MIN, UNIFORM_BURST_MAX)))
         elif self.workload_type == 'Poisson':
             # Exponential inter-arrivals (Poisson process) + heavy-tailed bursts.
             curr = 0
             for i in range(count):
-                curr += int(self.rng.expovariate(1.0 / POISSON_MEAN_INTERARRIVAL))
+                curr += int(self.task_rng.expovariate(1.0 / POISSON_MEAN_INTERARRIVAL))
                 procs.append(Process(i, curr,
-                                     _clamped_lognormal(self.rng, BURST_MEDIAN, BURST_SIGMA, BURST_MIN, BURST_MAX)))
+                                     _clamped_lognormal(self.task_rng, BURST_MEDIAN, BURST_SIGMA, BURST_MIN, BURST_MAX)))
         elif self.workload_type == 'Mixed':
             # Bimodal: mostly short interactive jobs, a few long batch jobs (each heavy-tailed).
             for i in range(count):
-                is_long = self.rng.random() < MIXED_LONG_JOB_FRACTION
+                is_long = self.task_rng.random() < MIXED_LONG_JOB_FRACTION
                 if is_long:
-                    burst = _clamped_lognormal(self.rng, MIXED_LONG_MEDIAN, MIXED_LONG_SIGMA, BURST_MIN, BURST_MAX)
+                    burst = _clamped_lognormal(self.task_rng, MIXED_LONG_MEDIAN, MIXED_LONG_SIGMA, BURST_MIN, BURST_MAX)
                 else:
-                    burst = _clamped_lognormal(self.rng, MIXED_SHORT_MEDIAN, MIXED_SHORT_SIGMA, BURST_MIN, BURST_MAX)
+                    burst = _clamped_lognormal(self.task_rng, MIXED_SHORT_MEDIAN, MIXED_SHORT_SIGMA, BURST_MIN, BURST_MAX)
                 procs.append(Process(i, i * MIXED_ARRIVAL_INTERVAL, burst))
         elif self.workload_type == 'Bursty':
             # Batched arrivals (idle gaps then floods) + heavy-tailed bursts.
             for i in range(count):
                 arrival = (i // BURSTY_BATCH_SIZE) * BURSTY_BATCH_INTERVAL
                 procs.append(Process(i, arrival,
-                                     _clamped_lognormal(self.rng, BURSTY_BURST_MEDIAN, BURSTY_BURST_SIGMA, BURST_MIN, BURST_MAX)))
+                                     _clamped_lognormal(self.task_rng, BURSTY_BURST_MEDIAN, BURSTY_BURST_SIGMA, BURST_MIN, BURST_MAX)))
         else:  # Default fallback
             for i in range(count):
                 procs.append(Process(i, i * MIXED_ARRIVAL_INTERVAL, 50))
@@ -390,8 +414,14 @@ class OSSimulator:
         # pressure varies across jobs rather than every job sharing one fixed footprint.
         for p in procs:
             p.working_set_size = _clamped_lognormal(
-                self.rng, WORKING_SET_MEDIAN, WORKING_SET_SIGMA, WORKING_SET_MIN, WORKING_SET_MAX)
+                self.task_rng, WORKING_SET_MEDIAN, WORKING_SET_SIGMA, WORKING_SET_MIN, WORKING_SET_MAX)
 
+        # Each task's own memory-access stream: the same accesses whenever it runs.
+        for p in procs:
+            p.mem_rng = random.Random(f"{self.seed}:memory:{p.pid}")
+
+        # Room for every task to finish: 400 tasks on 2 cores need ~25k ticks.
+        self.max_time = max(MAX_SIM_TICKS, TICKS_PER_TASK_CAP * len(procs))
         self.all_processes = sorted(procs, key=lambda x: x.arrival_time)
         return len(procs)
 
@@ -450,15 +480,16 @@ class OSSimulator:
         working_set_base = process.pid * 0x10000  # 64 KB region per process
         # Per-process hot working set (varies by job; falls back to 4 KB if unset).
         working_set_size = getattr(process, 'working_set_size', 4096)
-        num_accesses = self.rng.randint(2, 5)
+        rng = getattr(process, 'mem_rng', None) or self.task_rng
+        num_accesses = rng.randint(2, 5)
         addresses = []
         for _ in range(num_accesses):
-            if self.rng.random() < 0.7 and addresses:
+            if rng.random() < 0.7 and addresses:
                 base = addresses[-1]
-                offset = self.rng.randint(-128, 128)
+                offset = rng.randint(-128, 128)
                 address = max(working_set_base, base + offset)
             else:
-                address = working_set_base + self.rng.randint(0, working_set_size - 1)
+                address = working_set_base + rng.randint(0, working_set_size - 1)
             addresses.append(address)
         return addresses
 
@@ -504,12 +535,14 @@ class OSSimulator:
                     stall = 0
                     addresses = self._generate_memory_access(p)
                     for address in addresses:
-                        _, latency = self.cache_hierarchies[i].access(address)
+                        level, latency = self.cache_hierarchies[i].access(address)
+                        p.cache_misses += _MISSES_BY_HIT_LEVEL.get(level, 0)
                         stall += latency
                     stall = max(0, stall - len(addresses))  # one cycle/access overlaps work
                     work_done = 1.0 / (1.0 + stall * 0.01)
                     p.remaining_time -= work_done
                     core.slice_remaining -= 1
+                    self.busy_ticks += 1
 
                     if p.remaining_time <= 0:
                         p.completion_time = self.time
@@ -529,20 +562,28 @@ class OSSimulator:
         return self._calculate_metrics()
 
     def _calculate_metrics(self):
-        n = len(self.completed_processes)
-        if n == 0:
+        done = sorted(self.completed_processes, key=lambda p: (p.arrival_time, p.pid))
+        n_done = len(done)
+        if n_done == 0:
             return {'global_metrics': {}, 'simulation_config': self._config()}
 
-        avg_turnaround = sum(p.turnaround_time for p in self.completed_processes) / n
-        avg_waiting = sum(p.waiting_time for p in self.completed_processes) / n
-        responses = [p.response_time for p in self.completed_processes if p.response_time is not None]
+        # Warm-up: leave the earliest-arriving tasks out of the per-task averages. Throughput and
+        # makespan always cover the whole run.
+        measured = done[int(n_done * self.warmup_fraction):] or done
+        n = len(measured)
+        avg_turnaround = sum(p.turnaround_time for p in measured) / n
+        avg_waiting = sum(p.waiting_time for p in measured) / n
+        responses = [p.response_time for p in measured if p.response_time is not None]
         avg_response = sum(responses) / len(responses) if responses else 0.0
-        throughput = (n / self.time) * 1000 if self.time > 0 else 0.0
+        throughput = (n_done / self.time) * 1000 if self.time > 0 else 0.0
+        # Cache misses per task (L1, L2 and L3 misses of its own accesses).
+        avg_cache_misses = sum(p.cache_misses for p in measured) / n
 
-        # Real cache misses: private L1/L2 per core + the shared L3 counted once.
-        l1l2_misses = sum(h.l1.misses + h.l2.misses for h in self.cache_hierarchies)
-        l3_misses = self.cache_hierarchies[0].l3.misses
-        avg_cache_misses = (l1l2_misses + l3_misses) / n
+        # Load: the CPU time the tasks needed over the CPU time the cores could give while tasks
+        # were still arriving. Above 1 (100%) the cores can't keep up, the queue keeps growing,
+        # and the waiting averages depend on how many tasks were simulated, not on the scheduler.
+        last_arrival = max(p.arrival_time for p in self.all_processes)
+        load = self.busy_ticks / (self.num_cores * max(last_arrival, 1))
 
         return {
             'global_metrics': {
@@ -550,9 +591,12 @@ class OSSimulator:
                 'avg_waiting': round(avg_waiting, 2),
                 'avg_response': round(avg_response, 2),
                 'throughput': round(throughput, 2),
-                'total_switches': sum(p.context_switches for p in self.completed_processes),
+                'total_switches': sum(p.context_switches for p in done),
                 'avg_cache_misses': round(avg_cache_misses, 2),
                 'makespan': self.time,
+                'load': round(load, 2),
+                'tasks_measured': n,
+                'unfinished': len(self.all_processes) - n_done,
             },
             'simulation_config': self._config(),
             'trace': self.trace if self.record_trace else None,
@@ -591,6 +635,81 @@ def _avg_metrics(metric_dicts):
     return out
 
 
+# Metrics averaged over seeded runs (per-run values come from OSSimulator._calculate_metrics).
+_RUN_METRIC_KEYS = ('throughput', 'avg_waiting', 'avg_turnaround', 'avg_response',
+                    'avg_cache_misses', 'makespan', 'coop_rate', 'load')
+# Student-t critical values for a two-sided 95% interval, by degrees of freedom (runs - 1).
+_T95 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365, 8: 2.306,
+        9: 2.262, 10: 2.228, 11: 2.201, 12: 2.179, 13: 2.160, 14: 2.145, 15: 2.131, 16: 2.120,
+        17: 2.110, 18: 2.101, 19: 2.093, 20: 2.086, 21: 2.080, 22: 2.074, 23: 2.069, 24: 2.064,
+        25: 2.060, 26: 2.056, 27: 2.052, 28: 2.048, 29: 2.045}
+
+
+def make_seeds(seed, runs):
+    """Seeds for `runs` runs: seed, seed+1, ... A random starting seed is picked when none is
+    given, and reported, so any run can be repeated exactly."""
+    runs = max(1, int(runs))
+    base = int(seed) if seed is not None else random.randrange(1, 1_000_000)
+    return [base + i for i in range(runs)]
+
+
+def _mean_ci(rows):
+    """Average each metric over runs. With 2+ runs, also the 95% confidence-interval half-width
+    under 'ci' (the true average is likely within mean +/- ci)."""
+    out, ci = {}, {}
+    for k in _RUN_METRIC_KEYS:
+        vals = [r[k] for r in rows if k in r]
+        if not vals:
+            continue
+        out[k] = round(sum(vals) / len(vals), 2)
+        if len(vals) >= 2:
+            ci[k] = round(_T95.get(len(vals) - 1, 1.96) * statistics.stdev(vals) / math.sqrt(len(vals)), 2)
+    if ci:
+        out['ci'] = ci
+    return out
+
+
+def _run_replicated(core_funcs, *, num_cores, scheduler, seeds, num_processes, warmup,
+                    fixed_move=None):
+    """Run all four workloads once per seed. Returns ({workload: mean+ci}, overall mean+ci).
+    The overall row averages the four workloads within each run first, so its interval reflects
+    run-to-run variation. Raises StrategyRuntimeError if a strategy fails in any run."""
+    per_run = {wl: [] for wl in WORKLOAD_PROFILES}
+    for s in seeds:
+        for wl in WORKLOAD_PROFILES:
+            sim = OSSimulator(wl, core_funcs, scheduler=scheduler, seed=s, num_cores=num_cores,
+                              fixed_move=fixed_move, warmup_fraction=warmup)
+            sim.generate_workload(num_processes)
+            metrics = sim.run()['global_metrics']
+            if fixed_move is None:
+                metrics['coop_rate'] = round(sim.realized_coop_rate() * 100, 1)
+            per_run[wl].append(metrics)
+    per_wl = {wl: _mean_ci(rows) for wl, rows in per_run.items()}
+    overall = []
+    for i in range(len(seeds)):
+        row = {}
+        for k in _RUN_METRIC_KEYS:
+            vals = [per_run[wl][i][k] for wl in WORKLOAD_PROFILES if k in per_run[wl][i]]
+            if vals:
+                row[k] = sum(vals) / len(vals)
+        overall.append(row)
+    return per_wl, _mean_ci(overall)
+
+
+def _overload_info(baseline):
+    """Which workloads overload the cores, judged on the plain-scheduler baseline (same tasks,
+    no strategy), so the warning describes the setup rather than one strategy."""
+    over = [wl for wl in WORKLOAD_PROFILES
+            if baseline['workloads'].get(wl, {}).get('load', 0) > OVERLOAD]
+    return {'overloaded_workloads': over}
+
+
+def _run_info(seeds, num_processes, warmup):
+    """What a result was averaged over (shown with the results and kept when published)."""
+    return {'runs': len(seeds), 'seeds': list(seeds), 'seed': seeds[0],
+            'num_processes': num_processes, 'warmup': warmup}
+
+
 def build_core_trace(named_funcs, num_cores=2, seed=None, scheduler='round_robin',
                      workload='Mixed', process_count=30, max_ticks=200):
     """Run ONE representative simulation with tracing on, for the Gantt visual.
@@ -614,67 +733,79 @@ def build_core_trace(named_funcs, num_cores=2, seed=None, scheduler='round_robin
             'ticks': sim.trace[:max_ticks]}
 
 
-def run_baseline_simulation(num_cores=2, seed=None, scheduler='round_robin'):
+def run_baseline_simulation(num_cores=2, seed=None, scheduler='round_robin', runs=1,
+                            num_processes=FULL_PROCESS_COUNT, warmup=0.0, seeds=None):
     """Run the chosen scheduler in its textbook ("vanilla") form across all workload profiles.
 
     Cores play a constant move (no PD strategy), so this is the plain scheduler's performance —
-    a reference baseline to compare strategy-driven runs against. Returns {workloads, avg}.
+    a reference baseline to compare strategy-driven runs against. Uses the same seeds as the
+    strategies it is compared with (pass `seeds`), so the comparison is paired.
+    Returns {workloads, avg, scheduler}.
     """
-    per_wl = {}
-    for wl in WORKLOAD_PROFILES:
-        sim = OSSimulator(wl, [None] * num_cores, scheduler=scheduler,
-                          seed=seed, num_cores=num_cores, fixed_move=BASELINE_MOVE)
-        sim.generate_workload(FULL_PROCESS_COUNT)
-        per_wl[wl] = sim.run()['global_metrics']
-    return {'workloads': per_wl, 'avg': _avg_metrics(per_wl.values()), 'scheduler': scheduler}
+    seeds = list(seeds) if seeds else make_seeds(seed, runs)
+    per_wl, avg = _run_replicated([None] * num_cores, num_cores=num_cores, scheduler=scheduler,
+                                  seeds=seeds, num_processes=num_processes, warmup=warmup,
+                                  fixed_move=BASELINE_MOVE)
+    return {'workloads': per_wl, 'avg': avg, 'scheduler': scheduler}
 
 
-def run_full_simulation(strategies_data, num_cores=2, seed=None, scheduler='round_robin'):
+def run_full_simulation(strategies_data, num_cores=2, seed=None, scheduler='round_robin',
+                        runs=1, num_processes=FULL_PROCESS_COUNT, warmup=0.0):
     """HOMOGENEOUS: benchmark each strategy replicated across all N cores.
 
-    Returns {assignment_mode, scheduler, num_cores, baseline, strategies: {name: {workloads, avg, coop_rate}}}.
-    Each per-workload metrics dict carries its own coop_rate; `avg` carries the averaged coop_rate.
+    Each strategy (and the baseline) is run on the same `runs` seeds and the metrics averaged,
+    with 95% confidence intervals when runs >= 2. Returns {assignment_mode, scheduler, num_cores,
+    baseline, strategies: {name: {workloads, avg, coop_rate}}, errors, runs, seeds, ...}.
     """
+    seeds = make_seeds(seed, runs)
     strategies = {}
     errors = []   # [{name, reason}] for strategies left out of the ranking (disqualified)
     for strat in strategies_data:
         name = strat['name']
-        func = extract_strategy_func(strat['code'], seed=seed)
+        func = extract_strategy_func(strat['code'], seed=seeds[0])
         if not func:
             errors.append({'name': name, 'reason': 'could not find a strategy function in the code'})
             continue
-        per_wl = {}
-        coop_rates = []
         try:
-            for wl in WORKLOAD_PROFILES:
-                sim = OSSimulator(wl, [func] * num_cores, scheduler=scheduler,
-                                  seed=seed, num_cores=num_cores)
-                sim.generate_workload(FULL_PROCESS_COUNT)
-                metrics = sim.run()['global_metrics']
-                cr = round(sim.realized_coop_rate() * 100, 1)
-                metrics['coop_rate'] = cr
-                coop_rates.append(cr)
-                per_wl[wl] = metrics
+            per_wl, avg = _run_replicated([func] * num_cores, num_cores=num_cores,
+                                          scheduler=scheduler, seeds=seeds,
+                                          num_processes=num_processes, warmup=warmup)
         except StrategyRuntimeError as e:
             errors.append({'name': name, 'reason': e.reason})
             continue
-        avg = _avg_metrics(per_wl.values())
-        avg['coop_rate'] = round(sum(coop_rates) / len(coop_rates), 1) if coop_rates else 0.0
-        strategies[name] = {'workloads': per_wl, 'avg': avg, 'coop_rate': avg['coop_rate']}
+        strategies[name] = {'workloads': per_wl, 'avg': avg, 'coop_rate': avg.get('coop_rate', 0.0)}
 
+    baseline = run_baseline_simulation(num_cores=num_cores, scheduler=scheduler, seeds=seeds,
+                                       num_processes=num_processes, warmup=warmup)
     return {
         'assignment_mode': 'homogeneous',
         'scheduler': scheduler,
         'num_cores': num_cores,
-        'baseline': run_baseline_simulation(num_cores=num_cores, seed=seed, scheduler=scheduler),
+        'baseline': baseline,
         'strategies': strategies,
         'errors': errors,
+        **_overload_info(baseline),
+        **_run_info(seeds, num_processes, warmup),
     }
+
+
+# Heterogeneous results use shorter metric names (wait_time, turnaround, ...); keep the CI with them.
+_HET_NAMES = {'throughput': 'throughput', 'avg_waiting': 'wait_time', 'avg_turnaround': 'turnaround',
+              'avg_response': 'response', 'makespan': 'makespan', 'avg_cache_misses': 'cache_misses',
+              'coop_rate': 'coop_rate', 'load': 'load'}
+
+
+def _het_summary(m):
+    out = {short: m[long] for long, short in _HET_NAMES.items() if long in m}
+    if 'ci' in m:
+        out['ci'] = {_HET_NAMES[k]: v for k, v in m['ci'].items() if k in _HET_NAMES}
+    return out
 
 
 def run_heterogeneous_simulation(strategies_data, num_cores=2, seed=None,
                                  scheduler='round_robin', max_combinations=None,
-                                 time_budget_s=None, unlimited=False):
+                                 time_budget_s=None, unlimited=False,
+                                 runs=1, num_processes=FULL_PROCESS_COUNT, warmup=0.0):
     """HETEROGENEOUS: each strategy used at most once.
 
     Enumerates itertools.combinations(strategies, num_cores) — no replacement — runs each mixture
@@ -702,10 +833,11 @@ def run_heterogeneous_simulation(strategies_data, num_cores=2, seed=None,
     and 13 appear in 51. A student's rank would then track their position in the list rather than
     their strategy. Shuffling with the run's own seed keeps results reproducible.
     """
+    seeds = make_seeds(seed, runs)
     funcs, names = [], []
     errors = {}   # strategy name -> reason; these are disqualified from every mixture
     for strat in strategies_data:
-        func = extract_strategy_func(strat['code'], seed=seed)
+        func = extract_strategy_func(strat['code'], seed=seeds[0])
         if func:
             funcs.append(func)
             names.append(strat['name'])
@@ -727,7 +859,7 @@ def run_heterogeneous_simulation(strategies_data, num_cores=2, seed=None,
     # whole space is covered the order is irrelevant (results are sorted by throughput at the
     # end), so there is no branch here to get wrong.
     combos = all_combos[:]
-    random.Random(seed).shuffle(combos)
+    random.Random(seeds[0]).shuffle(combos)
 
     ceiling = None if unlimited else max_combinations
     if ceiling is not None and ceiling > 0:
@@ -755,43 +887,19 @@ def run_heterogeneous_simulation(strategies_data, num_cores=2, seed=None,
         ]
         composition = {names[i]: 1 for i in combo}  # each strategy at most once
 
-        agg = []
-        per_wl = {}
-        coop_rates = []
         try:
-            for wl in WORKLOAD_PROFILES:
-                sim = OSSimulator(wl, core_strategies, scheduler=scheduler,
-                                  seed=seed, num_cores=num_cores)
-                sim.generate_workload(FULL_PROCESS_COUNT)
-                metrics = sim.run()['global_metrics']
-                cr = round(sim.realized_coop_rate() * 100, 1)
-                metrics['coop_rate'] = cr
-                coop_rates.append(cr)
-                agg.append(metrics)
-                per_wl[wl] = metrics
+            per_wl, m = _run_replicated(core_strategies, num_cores=num_cores, scheduler=scheduler,
+                                        seeds=seeds, num_processes=num_processes, warmup=warmup)
         except StrategyRuntimeError as e:
             errors.setdefault(names[combo[e.core_idx]], e.reason)
             elapsed += time.perf_counter() - started
             continue
-        m = _avg_metrics(agg)
-        coop_avg = round(sum(coop_rates) / len(coop_rates), 1) if coop_rates else 0.0
         # Per-profile breakdown so the frontend profile dropdown works for heterogeneous too.
-        per_wl_summary = {wl: {
-            'throughput': mm['throughput'], 'wait_time': mm['avg_waiting'],
-            'turnaround': mm['avg_turnaround'], 'response': mm['avg_response'],
-            'makespan': mm['makespan'], 'cache_misses': mm['avg_cache_misses'],
-            'coop_rate': mm['coop_rate'],
-        } for wl, mm in per_wl.items()}
+        per_wl_summary = {wl: _het_summary(mm) for wl, mm in per_wl.items()}
         results.append({
             'combination': composition,
             'assignment_details': assignment_details,
-            'throughput': m['throughput'],
-            'wait_time': m['avg_waiting'],
-            'turnaround': m['avg_turnaround'],
-            'response': m['avg_response'],
-            'makespan': m['makespan'],
-            'cache_misses': m['avg_cache_misses'],
-            'coop_rate': coop_avg,
+            **_het_summary(m),
             'workloads': per_wl_summary,
         })
         elapsed += time.perf_counter() - started
@@ -802,6 +910,8 @@ def run_heterogeneous_simulation(strategies_data, num_cores=2, seed=None,
         results = [r for r in results
                    if not any(d['strategy_name'] in errors for d in r['assignment_details'])]
     results.sort(key=lambda r: r['throughput'], reverse=True)
+    baseline_result = run_baseline_simulation(num_cores=num_cores, scheduler=scheduler, seeds=seeds,
+                                              num_processes=num_processes, warmup=warmup)
     return {
         'assignment_mode': 'heterogeneous',
         'scheduler': scheduler,
@@ -813,9 +923,10 @@ def run_heterogeneous_simulation(strategies_data, num_cores=2, seed=None,
         # only provably the best when sampled is False. `seed` is reported because it selects
         # *which* subset was drawn, so a sampled run can be reproduced exactly.
         'sampled': len(results) < total,
-        'seed': seed,
         'elapsed_seconds': round(elapsed, 3),
-        'baseline': run_baseline_simulation(num_cores=num_cores, seed=seed, scheduler=scheduler),
+        'baseline': baseline_result,
         'results': results,
+        **_overload_info(baseline_result),
+        **_run_info(seeds, num_processes, warmup),
         'errors': [{'name': n, 'reason': r} for n, r in errors.items()],
     }

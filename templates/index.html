@@ -555,6 +555,33 @@
             <div>
                 <label style="display: block; margin-bottom: 5px; font-weight: bold;">Seed (optional):</label>
                 <input type="number" id="os_seed" placeholder="Random" style="width: 100%; padding: 8px;">
+                <small style="color: var(--text-secondary);">Same seed = same tasks, so a run can be repeated exactly.</small>
+            </div>
+            <div>
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Runs to average:</label>
+                <input type="number" id="os_runs" value="10" min="1" max="30" style="width: 100%; padding: 8px;">
+                <small style="color: var(--text-secondary);">Each run makes a different set of tasks; results
+                    are averaged and shown with a &plusmn; range. More runs = fairer, slower.</small>
+            </div>
+            <div>
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Tasks per workload:</label>
+                <select id="os_tasks" style="width: 100%; padding: 8px;">
+                    <option value="50" selected>50 (quick)</option>
+                    <option value="100">100</option>
+                    <option value="200">200</option>
+                    <option value="400">400 (slow; for reports)</option>
+                </select>
+                <small style="color: var(--text-secondary);">How many tasks each run makes up.</small>
+            </div>
+            <div>
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Warm-up:</label>
+                <select id="os_warmup" style="width: 100%; padding: 8px;">
+                    <option value="0" selected>Off: count every task</option>
+                    <option value="0.1">Leave out the first 10% of tasks</option>
+                    <option value="0.2">Leave out the first 20% of tasks</option>
+                </select>
+                <small style="color: var(--text-secondary);">The first tasks find an empty system and are
+                    served unusually fast; leaving them out measures normal running.</small>
             </div>
         </div>
 
@@ -837,12 +864,13 @@
             for (let i = 0; i < k; i++) r = r * (n - i) / (i + 1);
             return Math.round(r);
         }
-        // Seconds per core-assignment combination, measured rather than derived: each combination
-        // is 4 workload profiles x 50 processes, and that cost turns out to be flat in core count
-        // (0.405 / 0.386 / 0.384s at 2 / 3 / 4 cores). Deliberately not scaled by `cores`, which
-        // the previous estimate did and got wrong. A pessimistic strategy that burns its whole
+        // Seconds per core-assignment combination, measured rather than derived: one run of the
+        // 4 workload profiles takes ~0.32 / 0.93 / 1.92s at 50 / 200 / 400 tasks (linear in tasks,
+        // flat in core count), times the number of seeded runs. A strategy that burns its whole
         // instruction allowance each call runs slower than this, so treat it as a floor.
-        const OS_SECS_PER_COMBINATION = 0.4;
+        function osSecsPerCombination(tasks, runs) {
+            return (0.08 + 0.0046 * (tasks || 50)) * Math.max(1, runs || 1);
+        }
         const OS_TIME_BUDGET_SECS = 300;   // mirrors OS_SIM_TIME_BUDGET_S in app.py
 
         function humanSecs(secs) {
@@ -905,8 +933,11 @@
                 // Homogeneous = one run per strategy; heterogeneous enumerates C(n, cores) mixtures.
                 const comb = isHet ? nCr(n, cores) : n;
                 // +1: every run also simulates the plain-scheduler baseline, which costs about one more.
-                const fullSecs = (comb + 1) * OS_SECS_PER_COMBINATION;
-                const head = `${comb.toLocaleString()} core-assignment combination(s) on ${cores} cores, from ${n} strategies.`;
+                const runs = (extra && extra.runs) || 1, tasks = (extra && extra.tasks) || 50;
+                const perComb = osSecsPerCombination(tasks, runs);
+                const fullSecs = (comb + 1) * perComb;
+                const head = `${comb.toLocaleString()} core-assignment combination(s) on ${cores} cores, from ${n} strategies, `
+                    + `${plural(runs, 'run')} of ${tasks} tasks each.`;
 
                 if (!isHet || unlimited || fullSecs <= OS_TIME_BUDGET_SECS) {
                     const warn = (unlimited && fullSecs > OS_TIME_BUDGET_SECS)
@@ -919,7 +950,7 @@
                 }
 
                 // Over budget and limits left on: say plainly that the answer will be partial.
-                const willRun = Math.max(1, Math.floor(OS_TIME_BUDGET_SECS / OS_SECS_PER_COMBINATION));
+                const willRun = Math.max(1, Math.floor(OS_TIME_BUDGET_SECS / perComb));
                 const pct = ((willRun / comb) * 100).toFixed(1);
                 return confirm(
                     `${head}\n\nRunning all of them would take ${humanSecs(fullSecs)}. To stay inside the `
@@ -1868,12 +1899,17 @@
             }
 
             const unlimited = document.getElementById('os_unlimited').checked;
+            const runs = parseInt(document.getElementById('os_runs').value);
+            if (!(runs >= 1 && runs <= 30)) { alert('Runs to average must be between 1 and 30'); return; }
+            const tasks = parseInt(document.getElementById('os_tasks').value);
+            const warmup = parseFloat(document.getElementById('os_warmup').value);
             // No cap — the run is bounded by time and reports what it covered. The dialog states
             // how long it will take and, when sampling, how much of the space will be skipped.
             if (!confirmWorkload('os', strategies.length, 0, 0,
-                                 { numCores, assignment: coreAssignmentMode, unlimited })) return;
+                                 { numCores, assignment: coreAssignmentMode, unlimited, runs, tasks })) return;
 
             const payload = { strategies, num_cores: numCores, core_assignment_mode: coreAssignmentMode, scheduler, seed, unlimited,
+                              runs, num_processes: tasks, warmup,
                               isolated: document.getElementById('isolatedOs')?.checked || false };
             const spinner = runSpinner('osResults', 'Running OS simulation', 'osSimBtn');
 

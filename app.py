@@ -2455,7 +2455,7 @@ def parse_payoff_model(config):
 
 
 def _run_core_simulation(strategies, *, num_cores, scheduler, core_assignment_mode,
-                         core_sim_seed, unlimited=False):
+                         core_sim_seed, unlimited=False, runs=1, num_processes=50, warmup=0.0):
     """Run the OS simulation on exactly the supplied strategies, returning result/config blocks.
 
     No screening / top-K selection: the user's submitted strategies *are* the pool.
@@ -2473,10 +2473,12 @@ def _run_core_simulation(strategies, *, num_cores, scheduler, core_assignment_mo
             core_simulation_heterogeneous = run_heterogeneous_simulation(
                 pool, num_cores=num_cores, seed=core_sim_seed, scheduler=scheduler,
                 max_combinations=MAX_COMBINATIONS,
-                time_budget_s=OS_SIM_TIME_BUDGET_S, unlimited=unlimited)
+                time_budget_s=OS_SIM_TIME_BUDGET_S, unlimited=unlimited,
+                runs=runs, num_processes=num_processes, warmup=warmup)
         else:
             core_simulation_results = run_full_simulation(
-                pool, num_cores=num_cores, seed=core_sim_seed, scheduler=scheduler)
+                pool, num_cores=num_cores, seed=core_sim_seed, scheduler=scheduler,
+                runs=runs, num_processes=num_processes, warmup=warmup)
     except Exception as sim_error:
         app.logger.error(f"Core Simulation Error: {sim_error}")
         core_simulation_results = {'error': str(sim_error)}
@@ -2489,19 +2491,21 @@ def _run_core_simulation(strategies, *, num_cores, scheduler, core_assignment_mo
     TRACE_LAYOUT_CAP = 6          # layouts traced (× 4 workloads each)
     TRACE_MAX_TICKS = 160         # per-trace tick cap (4× traces, so a touch shorter)
     traces = []
+    trace_seed = ((core_simulation_results or {}).get('seed')
+                  or (core_simulation_heterogeneous or {}).get('seed') or core_sim_seed)
     try:
         from core_simulation import build_core_trace, extract_strategy_func
         code_by_name = {s['name']: s['code'] for s in pool}
 
         def _layout_traces(layout, label):
             """One trace per workload profile for a given core layout."""
-            named_funcs = [(n, extract_strategy_func(code_by_name.get(n, ''), seed=core_sim_seed))
+            named_funcs = [(n, extract_strategy_func(code_by_name.get(n, ''), seed=trace_seed))
                            for n in layout]
             if not named_funcs or not all(f for _, f in named_funcs):
                 return []
             out = []
             for wl in WORKLOAD_PROFILES:
-                tr = build_core_trace(named_funcs, num_cores=num_cores, seed=core_sim_seed,
+                tr = build_core_trace(named_funcs, num_cores=num_cores, seed=trace_seed,
                                       scheduler=scheduler, workload=wl, max_ticks=TRACE_MAX_TICKS)
                 if tr is not None:
                     tr['label'] = label          # which strategy / mixture
@@ -2526,6 +2530,9 @@ def _run_core_simulation(strategies, *, num_cores, scheduler, core_assignment_mo
         'scheduler': scheduler,
         'core_assignment_mode': core_assignment_mode,
         'selected_strategies': [s['name'] for s in pool],
+        'runs': runs,
+        'num_processes': num_processes,
+        'warmup': warmup,
     }
     if traces:
         core_simulation_config['traces'] = traces
@@ -2539,7 +2546,8 @@ def _run_core_simulation(strategies, *, num_cores, scheduler, core_assignment_mo
 
 
 def run_standalone_core_simulation(strategies, *, num_cores, scheduler,
-                                   core_assignment_mode, seed, unlimited=False):
+                                   core_assignment_mode, seed, unlimited=False,
+                                   runs=1, num_processes=50, warmup=0.0):
     """Run the OS core simulation on its own (no tournament needed).
 
     Runs on exactly the supplied strategies — no screening, no top-K. Returns the three
@@ -2547,7 +2555,8 @@ def run_standalone_core_simulation(strategies, *, num_cores, scheduler,
     """
     return _run_core_simulation(
         strategies, num_cores=num_cores, scheduler=scheduler,
-        core_assignment_mode=core_assignment_mode, core_sim_seed=seed, unlimited=unlimited)
+        core_assignment_mode=core_assignment_mode, core_sim_seed=seed, unlimited=unlimited,
+        runs=runs, num_processes=num_processes, warmup=warmup)
 
 
 @app.route('/os-simulation', methods=['POST'])
@@ -2620,6 +2629,22 @@ def os_simulation():
     if not isinstance(unlimited, bool):
         return jsonify({'error': 'unlimited must be a boolean'}), 400
 
+    # How many seeded runs to average (each a different set of tasks), how many tasks per
+    # workload, and the share of earliest tasks left out as warm-up.
+    from core_simulation import TASK_COUNT_CHOICES, WARMUP_CHOICES, MAX_RUNS
+    try:
+        runs = int(data.get('runs', 10))
+        num_processes = int(data.get('num_processes', 50))
+        warmup = float(data.get('warmup', 0))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'runs, num_processes and warmup must be numbers'}), 400
+    if not (1 <= runs <= MAX_RUNS):
+        return jsonify({'error': f'runs must be between 1 and {MAX_RUNS}'}), 400
+    if num_processes not in TASK_COUNT_CHOICES:
+        return jsonify({'error': f'num_processes must be one of {list(TASK_COUNT_CHOICES)}'}), 400
+    if warmup not in WARMUP_CHOICES:
+        return jsonify({'error': f'warmup must be one of {list(WARMUP_CHOICES)}'}), 400
+
     # Optional sandbox mode (same as 1v1 / N-Player): test-run each strategy in a separate,
     # time-limited process first and leave out any that hang or crash. Done after the cheap
     # parameter checks so a bad form value is reported without waiting for the screen.
@@ -2638,7 +2663,8 @@ def os_simulation():
     try:
         result = run_standalone_core_simulation(
             clean, num_cores=num_cores, scheduler=scheduler,
-            core_assignment_mode=core_assignment_mode, seed=seed, unlimited=unlimited)
+            core_assignment_mode=core_assignment_mode, seed=seed, unlimited=unlimited,
+            runs=runs, num_processes=num_processes, warmup=warmup)
         if isolated:
             result['flags'] = screen_flags
             result['screened'] = True
