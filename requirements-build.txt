@@ -1,0 +1,3 @@
+# Everything in requirements.txt plus PyInstaller, to build the double-click app (build_exe.py).
+-r requirements.txt
+pyinstaller~=6.22.3

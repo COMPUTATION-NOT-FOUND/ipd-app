@@ -21,6 +21,16 @@ from logging_config import setup_logging
 # the os.environ reads later in this file (FLASK_SECRET_KEY etc.). This lets secrets
 # live in a git-ignored .env instead of being hard-coded in the WSGI file.
 # No-op if python-dotenv isn't installed or no .env exists.
+# Where the app's files live. Normally both are this folder. In the bundled exe (PyInstaller),
+# code, templates and static files are unpacked to a temporary folder (RESOURCE_DIR) that is
+# deleted when the app closes, so the user's own files (.env, gallery caches, saved strategies)
+# live next to the exe instead (APP_DIR), where they survive restarts.
+if getattr(sys, 'frozen', False):
+    APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
+    RESOURCE_DIR = getattr(sys, '_MEIPASS', APP_DIR)
+else:
+    APP_DIR = RESOURCE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 try:
     from dotenv import load_dotenv
     # Load the .env sitting next to this file by absolute path. On PythonAnywhere
@@ -28,7 +38,7 @@ try:
     # load_dotenv() (which searches CWD) silently finds nothing and leaves
     # FLASK_SECRET_KEY unset -> the app crashes on import. An absolute path makes
     # the load independent of the working directory.
-    _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+    _env_path = os.path.join(APP_DIR, '.env')
     load_dotenv(_env_path)
 except ImportError:
     pass
@@ -228,7 +238,8 @@ HUB_BASE_URL = os.environ.get('HUB_BASE_URL', '').strip().rstrip('/')
 
 app_logger = setup_logging(is_production=IS_PRODUCTION)
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder=os.path.join(RESOURCE_DIR, 'templates'),
+            static_folder=os.path.join(RESOURCE_DIR, 'static'))
 
 
 def _rate_limit_key():
@@ -1202,7 +1213,7 @@ def hub_publish_result():
 # Local strategy cache: fetched strategies persist here so the gallery works offline.
 # It is ONLY refreshed when the user presses Refresh (POST /hub/refresh); every other
 # read serves from this file. git-ignored, local-only, holds public strategy source.
-STRATEGY_CACHE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'strategy_cache.json')
+STRATEGY_CACHE_PATH = os.path.join(APP_DIR, 'strategy_cache.json')
 
 
 def _read_strategy_cache():
@@ -1221,7 +1232,7 @@ def _write_strategy_cache(strategies):
 
 # Organizer-provided PRACTICE strategies are cached separately from player submissions
 # (two galleries: player submissions vs organizer practice code).
-PRACTICE_CACHE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'practice_cache.json')
+PRACTICE_CACHE_PATH = os.path.join(APP_DIR, 'practice_cache.json')
 
 
 def _read_practice_cache():
@@ -1242,7 +1253,7 @@ def _write_practice_cache(strategies):
 # the Hub caches above (which mirror the website), this is purely local and private — it never
 # leaves the machine and is git-ignored. It gives the "Save to Gallery" button something real to
 # do in the local app (the website-backed save it used to call lives only in ipd-hub now).
-LOCAL_GALLERY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'local_gallery.json')
+LOCAL_GALLERY_PATH = os.path.join(APP_DIR, 'local_gallery.json')
 
 
 def _read_local_gallery():
@@ -2764,23 +2775,49 @@ def determine_weighted_results(leaderboard, weights):
 
 
 
-if __name__ == '__main__':
+def main(open_browser=False):
+    """Start the local server (used by `python app.py` and by the bundled exe's launcher)."""
+    import socket
+    import threading
+    import webbrowser
+
     # Environment-based debug mode
     # Default to False for production safety
     # Set FLASK_DEBUG=True environment variable to enable debug mode
     debug_mode = os.environ.get('FLASK_DEBUG', 'False') == 'True'
-    
+
     if debug_mode:
         print("WARNING: Debug mode is ENABLED. Only use this in development!")
         print("Set FLASK_DEBUG=False or remove the variable for production.")
     else:
         print("Debug mode is disabled (production-safe)")
-    
+
     # Always loopback: this single-user app auto-logs in the local owner, so it must never listen
     # on the network (there is no host flag to forget).
     host = '127.0.0.1'
-    port = 5000
-    print(f"Starting server on http://{host}:{port}")
+    # IPD_PORT (in .env or the environment) moves the app off 5000 if something else uses it.
+    try:
+        port = int(os.environ.get('IPD_PORT', '5000'))
+    except (TypeError, ValueError):
+        port = 5000
+    if not (1024 <= port <= 65535):
+        port = 5000
+    url = f"http://{host}:{port}"
+
+    # Already running (e.g. the exe was double-clicked twice)? Don't fail on the busy port: just
+    # point the browser at the running copy.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.5)
+        already_running = probe.connect_ex((host, port)) == 0
+    if already_running:
+        print(f"The app is already running at {url}")
+        if open_browser:
+            webbrowser.open(url)
+        return
+
+    print(f"Starting server on {url}")
+    if open_browser:
+        threading.Timer(1.5, webbrowser.open, args=(url,)).start()
     if debug_mode:
         app.run(host=host, port=port, debug=True)
     else:
@@ -2791,5 +2828,9 @@ if __name__ == '__main__':
         except ImportError:
             app.run(host=host, port=port, debug=False)
         else:
-            print("Press Ctrl+C to stop.")
+            print("Keep this window open while you use the app. Close it (or press Ctrl+C) to stop.")
             serve(app, host=host, port=port)
+
+
+if __name__ == '__main__':
+    main()

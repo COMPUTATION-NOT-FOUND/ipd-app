@@ -1,0 +1,61 @@
+# Builds the double-click app (build_exe.py / PyInstaller) on Windows, macOS and Linux.
+#
+# - Push a version tag (e.g. `git tag v1.0.0 && git push origin v1.0.0`) to build all three and
+#   attach them, plus .env.example, to a GitHub Release that students download from.
+# - Or run it by hand from the Actions tab ("Run workflow") to get the files as build artifacts.
+name: Build app
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create the release
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            built: dist/ipd-app.exe
+            asset: ipd-app-windows.exe
+          - os: macos-latest
+            built: dist/ipd-app
+            asset: ipd-app-macos
+          - os: ubuntu-latest
+            built: dist/ipd-app
+            asset: ipd-app-linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install -r requirements-build.txt
+      - name: Run the tests first
+        shell: bash
+        env:
+          RUN_TOURNAMENTS_SYNC: 'true'
+          FLASK_ENV: development
+          FLASK_SECRET_KEY: test
+        run: python -m pip install -r requirements-dev.txt && python -m pytest -q
+      - name: Build
+        run: python build_exe.py
+      - name: Name the file for this OS
+        shell: bash
+        run: mkdir -p out && cp "${{ matrix.built }}" "out/${{ matrix.asset }}" && cp .env.example out/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: out/
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/${{ matrix.asset }}
+            out/.env.example
