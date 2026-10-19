@@ -13,7 +13,7 @@ You will:
 
 ## 1. Set it up (one time)
 
-**You need Python 3.10+.** Check with `python --version` (Windows: `py --version` also works;
+**You need Python 3.10+.** Check with `python --version` (Windows: some installs only have `py --version`;
 Linux/macOS: `python3 --version`). If you don't have it, install it from
 [python.org](https://www.python.org/downloads/).
 
@@ -31,7 +31,7 @@ cd ipd-app
 <details open><summary><strong>Windows (PowerShell)</strong></summary>
 
 ```powershell
-py -m venv .venv
+python -m venv .venv                # if 'python' isn't found, try: py -m venv .venv
 .\.venv\Scripts\Activate.ps1        # your prompt now shows (.venv)
 pip install -r requirements.txt
 ```
