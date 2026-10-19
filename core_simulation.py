@@ -60,6 +60,60 @@ def _guarded_hasattr(obj, name):
     return hasattr(obj, name)
 
 
+# Guarded `operator` module. operator.attrgetter / operator.methodcaller take attribute names as
+# strings, which the AST screen in is_safe_code cannot see and which never pass through the
+# guarded getattr above. This applies the same leading-underscore rule to those strings.
+# (Fix contributed by a student security review, Oct 2026.)
+import types as _types
+import operator as _real_operator
+
+
+def _reject_internal_attr(attr_path):
+    if isinstance(attr_path, str):
+        for part in attr_path.split('.'):
+            if part.startswith('_'):
+                raise AttributeError(f"Access to internal attribute '{part}' is not allowed")
+
+
+def _safe_attrgetter(*attrs):
+    for a in attrs:
+        _reject_internal_attr(a)
+    return _real_operator.attrgetter(*attrs)
+
+
+def _safe_methodcaller(name, *args, **kwargs):
+    _reject_internal_attr(name)
+    return _real_operator.methodcaller(name, *args, **kwargs)
+
+
+def _make_guarded_operator():
+    """A fresh module object per import, so one strategy reassigning e.g. operator.attrgetter
+    can't affect another strategy (or the real stdlib module the app itself uses)."""
+    shim = _types.ModuleType('operator')
+    for n in dir(_real_operator):
+        if not n.startswith('__'):
+            setattr(shim, n, getattr(_real_operator, n))
+    shim.attrgetter = _safe_attrgetter
+    shim.methodcaller = _safe_methodcaller
+    return shim
+
+
+# Allowed modules that strategies receive as a guarded copy instead of the real module.
+# Shared by both sandbox import hooks (here and in app.py's get_safe_globals).
+GUARDED_MODULE_FACTORIES = {'operator': _make_guarded_operator}
+
+
+def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+    """`__import__` for strategy code: only ALLOWED_IMPORTS, with guarded copies where defined."""
+    top_level = name.split('.')[0]
+    if top_level not in ALLOWED_IMPORTS:
+        raise ImportError(f"Import of '{name}' is not allowed in strategy code")
+    factory = GUARDED_MODULE_FACTORIES.get(top_level)
+    if factory is not None:
+        return factory()
+    return _real_import(name, globals, locals, fromlist, level)
+
+
 # Builtins exposed to sandboxed strategy code. Kept byte-identical across the three copies
 # (app.py, core_simulation.py, ipd-hub/app.py) so a strategy behaves the same in 1v1, N-Player,
 # the OS sim and the Hub. Notable inclusions/exclusions:
@@ -124,16 +178,10 @@ def get_safe_globals(seed=None):
     """
     globals_dict = {}
 
-    def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
-        top_level = name.split('.')[0]
-        if top_level not in ALLOWED_IMPORTS:
-            raise ImportError(f"Import of '{name}' is not allowed in strategy code")
-        return _real_import(name, globals, locals, fromlist, level)
-
-    # Fresh copy per call: _safe_import below is a closure over this call, and a shared mutable
-    # dict would let one strategy's exec leak names into another's.
+    # Fresh copy per call: a shared mutable dict would let one strategy's exec leak names into
+    # another's.
     safe_builtins = dict(_SANDBOX_BUILTINS)
-    safe_builtins['__import__'] = _safe_import
+    safe_builtins['__import__'] = guarded_import
 
     # Provide seeded random instance if seed is given, otherwise global module
     random_provider = random.Random(seed) if seed is not None else random

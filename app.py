@@ -495,10 +495,7 @@ def _screening_shortfall(flags):
 # checker all agree. Dangerous stdlib modules (os, sys, subprocess, socket, io, pathlib, shutil,
 # importlib, ctypes, pickle, threading, multiprocessing, signal, gc, inspect, ast, dis, time, etc.)
 # are intentionally absent.
-from core_simulation import ALLOWED_IMPORTS
-
-# Capture the real __import__ at module load time so the sandbox wrapper can use it.
-_real_import = __import__
+from core_simulation import ALLOWED_IMPORTS, guarded_import
 
 
 # Guarded attribute access for the sandbox. `is_safe_code` blocks `x.__class__` syntactically
@@ -724,17 +721,13 @@ def get_safe_globals(context=None, rng=None):
     # Create globals_dict first so we can reference it in the globals() function
     globals_dict = {}
 
-    def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
-        top_level = name.split('.')[0]
-        if top_level not in ALLOWED_IMPORTS:
-            raise ImportError(f"Import of '{name}' is not allowed in strategy code")
-        return _real_import(name, globals, locals, fromlist, level)
-
-    # Fresh copy per call: the two closures below capture this call's globals_dict/_safe_import,
-    # and a shared mutable dict would let one strategy's exec leak names into another's.
+    # Fresh copy per call: the closure below captures this call's globals_dict, and a shared
+    # mutable dict would let one strategy's exec leak names into another's. The import hook is
+    # shared with the OS sim (core_simulation.guarded_import): ALLOWED_IMPORTS only, with guarded
+    # copies of modules such as `operator`.
     safe_builtins = dict(_SANDBOX_BUILTINS)
     safe_builtins.update({
-        '__import__': _safe_import,
+        '__import__': guarded_import,
         'globals': lambda: globals_dict  # Allow strategies to check what's in their globals
     })
 
