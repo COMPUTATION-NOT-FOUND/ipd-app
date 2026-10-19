@@ -49,27 +49,17 @@
 
         </div>
 
-        <!-- Connect to the class website: saves the address + token next to the app (.env) -->
+        <!-- Class website connection lives on the Settings page; here just show the status. -->
         <div class="card" id="connect">
-            <h3><i class="fas fa-plug"></i> Connect to the class website</h3>
             {% if hub_enabled and hub_has_token %}
-            <p><i class="fas fa-circle-check" style="color: var(--success-color);"></i> Connected to
-                <strong>{{ hub_base_url }}</strong>.</p>
-            <details>
-                <summary style="cursor: pointer;">Change connection</summary>
+            <p style="margin: 0;"><i class="fas fa-circle-check" style="color: var(--success-color);"></i>
+                Connected to <strong>{{ hub_base_url }}</strong>.
+                <a href="/settings">Change in Settings</a></p>
             {% else %}
-            <p>Not connected yet. Enter the website address and the class token your instructor gave
-                you. You only need to do this once: the app remembers them.</p>
-            <details open>
-                <summary style="display: none;"></summary>
+            <p style="margin: 0;"><i class="fas fa-plug"></i> Not connected to the class website yet.
+                <a href="/settings"><strong>Connect in Settings</strong></a> with the address and class token
+                your instructor gave you.</p>
             {% endif %}
-                <input type="url" id="connUrl" class="hub-field" maxlength="200"
-                       placeholder="https://your-class-site.pythonanywhere.com" value="{{ hub_base_url }}">
-                <input type="password" id="connToken" class="hub-field" maxlength="200" autocomplete="off"
-                       placeholder="Class token (from your instructor)">
-                <button id="connBtn" class="btn-success"><i class="fas fa-plug"></i> Connect</button>
-                <div id="connMsg" class="hub-msg"></div>
-            </details>
         </div>
 
         <!-- Submit your strategy (handoff to the website, which forces login) -->
@@ -242,29 +232,6 @@
                 showMsg('Passed local screening — opened the website prefilled. Log in and click Save.', true);
             } catch (e) { showMsg(e.message, false); }
             finally { btn.disabled = false; }
-        });
-        // "Connect to the class website": the server tests the address + token, saves them next
-        // to the app, and applies them at once; then pull the gallery and reload the page.
-        document.getElementById('connBtn').addEventListener('click', async () => {
-            const btn = document.getElementById('connBtn');
-            const base_url = document.getElementById('connUrl').value.trim();
-            const token = document.getElementById('connToken').value.trim();
-            if (!base_url || !token) { showMsg('Enter both the website address and the class token.', false, 'connMsg'); return; }
-            btn.disabled = true;
-            showMsg('Checking the connection…', true, 'connMsg');
-            try {
-                const resp = await fetch('/settings/hub', { method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ base_url, token }) });
-                const data = await resp.json().catch(() => ({ error: 'Unexpected reply from the app (status ' + resp.status + ').' }));
-                if (!resp.ok) throw new Error(data.error || 'Could not connect.');
-                showMsg("Connected! Loading classmates' strategies…", true, 'connMsg');
-                try { await fetch('/hub/refresh', { method: 'POST' }); } catch (e) { /* the page reload shows the cache */ }
-                window.location.reload();
-            } catch (e) {
-                showMsg(e.message, false, 'connMsg');
-            } finally {
-                btn.disabled = false;
-            }
         });
         document.getElementById('refreshBtn').addEventListener('click', doRefresh);
         document.querySelectorAll('.hub-subtab').forEach(b => b.addEventListener('click', () => {

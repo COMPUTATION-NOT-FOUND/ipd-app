@@ -1281,7 +1281,7 @@
         function addStrategyToWebsite(id) {
              const name = document.getElementById(`strategyName${id}`).value || '';
              const code = document.getElementById(`strategyCode${id}`).value || '';
-             if (!HUB_BASE_URL) { alert('Not connected to the class website yet: open the Hub page and use "Connect to the class website".'); return; }
+             if (!HUB_BASE_URL) { alert('Not connected to the class website yet: connect on the Settings page.'); return; }
              if (!name.trim() || !code.trim()) { alert('Enter a strategy name and code first.'); return; }
              const url = HUB_BASE_URL.replace(/\/$/, '')
                  + '/save-strategy?name=' + encodeURIComponent(name)
@@ -1390,12 +1390,12 @@
                 c.innerHTML = `<div class="part-empty" style="padding:14px; line-height:1.5;">
                     <i class="fas fa-circle-info"></i> The class gallery is empty.
                     To fetch classmates' strategies, bots and practice code,
-                    <a href="/hub#connect"><strong>connect to the class website</strong></a> on the Hub page
+                    <a href="/settings"><strong>connect to the class website</strong></a> on the Settings page
                     (your instructor gives you the address and token), then press <strong>Refresh Gallery</strong>.
                     You can still run tournaments with your own strategies and any you've saved locally.
                 </div>`;
                 const emptyStatus = document.getElementById(statusId);
-                if (emptyStatus) emptyStatus.innerText = 'Gallery empty — connect to the class website on the Hub page.';
+                if (emptyStatus) emptyStatus.innerText = 'Gallery empty — connect to the class website in Settings.';
                 return;
             }
 

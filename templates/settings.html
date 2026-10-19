@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Settings - Prisoner's Dilemma</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .container { padding-top: 8px; padding-bottom: 24px; }
+        .card { padding: 20px 24px; margin-bottom: 20px; }
+        .card > h2:first-child, .card > h3:first-child { margin-top: 0; }
+        .card p { margin: 0 0 14px; line-height: 1.5; }
+        .set-field { display: block; width: 100%; margin-bottom: 12px; }
+        .set-label { font-weight: 600; margin-bottom: 4px; }
+        .card button { margin: 4px 8px 4px 0; }
+        .set-msg { padding: 10px 12px; border-radius: var(--radius-sm); margin: 16px 0 0; display: none; }
+        .set-msg.ok { background: color-mix(in srgb, var(--color-success) 15%, transparent); border: 1px solid var(--success-color); }
+        .set-msg.err { background: color-mix(in srgb, var(--color-danger) 15%, transparent); border: 1px solid var(--danger-color); }
+        .set-path { font-family: var(--font-mono); font-size: 0.85rem; overflow-wrap: anywhere; }
+    </style>
+</head>
+<body>
+    {% include 'navbar.html' %}
+    <div class="container" style="max-width: 900px; margin: 0 auto; padding: 0 15px;">
+        <div class="card">
+            <h2 style="font-family: var(--font-mono);"><i class="fas fa-sliders"></i> Settings</h2>
+            <p>Settings are remembered on this computer, so you only enter them once. They are kept
+            even when you download a new version of the app.</p>
+        </div>
+
+        <!-- Class website connection: tested, then saved to DATA_DIR/.env and applied at once -->
+        <div class="card" id="connect">
+            <h3><i class="fas fa-plug"></i> Class website</h3>
+            {% if hub_enabled and hub_has_token %}
+            <p id="connStatus"><i class="fas fa-circle-check" style="color: var(--success-color);"></i>
+                Connected to <strong>{{ hub_base_url }}</strong>.</p>
+            {% else %}
+            <p id="connStatus">Not connected. Enter the website address and the class token your
+                instructor gave you, then press <strong>Connect</strong>.</p>
+            {% endif %}
+
+            <div class="set-label">Website address</div>
+            <input type="url" id="connUrl" class="set-field" maxlength="200"
+                   placeholder="https://your-class-site.pythonanywhere.com" value="{{ hub_base_url }}">
+            <div class="set-label">Class token</div>
+            <input type="password" id="connToken" class="set-field" maxlength="200" autocomplete="off"
+                   placeholder="{{ 'Leave blank to keep the saved token' if hub_has_token else 'Class token (from your instructor)' }}">
+
+            <button id="connBtn" class="btn-success"><i class="fas fa-plug"></i>
+                {{ 'Save changes' if hub_enabled and hub_has_token else 'Connect' }}</button>
+            {% if hub_enabled or hub_has_token %}
+            <button id="disconnectBtn" class="btn-primary" style="background: transparent; color: var(--danger-color); border: 1px solid var(--danger-color);">
+                <i class="fas fa-link-slash"></i> Disconnect</button>
+            {% endif %}
+            <div id="connMsg" class="set-msg"></div>
+        </div>
+
+        <div class="card">
+            <h3><i class="fas fa-folder-open"></i> Where your settings are kept</h3>
+            <p>Your connection, the strategies you save locally and the downloaded class gallery are
+            stored in this folder:</p>
+            <p class="set-path">{{ data_dir }}</p>
+        </div>
+    </div>
+
+    <script nonce="{{ csp_nonce }}">
+        function showMsg(text, ok) {
+            const el = document.getElementById('connMsg');
+            el.textContent = text;
+            el.className = 'set-msg ' + (ok ? 'ok' : 'err');
+            el.style.display = 'block';
+        }
+
+        async function postJson(url, body) {
+            const resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify(body || {}) });
+            const data = await resp.json().catch(() => ({ error: 'Unexpected reply from the app (status ' + resp.status + ').' }));
+            if (!resp.ok) throw new Error(data.error || 'Something went wrong.');
+            return data;
+        }
+
+        // Connect / save changes: the app tests the address + token before saving anything. A
+        // blank token keeps the saved one, so the address can be changed on its own.
+        document.getElementById('connBtn').addEventListener('click', async () => {
+            const btn = document.getElementById('connBtn');
+            const base_url = document.getElementById('connUrl').value.trim();
+            const token = document.getElementById('connToken').value.trim();
+            if (!base_url) { showMsg('Enter the website address.', false); return; }
+            btn.disabled = true;
+            showMsg('Checking the connection…', true);
+            try {
+                await postJson('/settings/hub', { base_url, token });
+                showMsg("Connected! Loading classmates' strategies…", true);
+                try { await fetch('/hub/refresh', { method: 'POST' }); } catch (e) { /* the gallery can be refreshed later */ }
+                window.location.reload();
+            } catch (e) {
+                showMsg(e.message, false);
+            } finally {
+                btn.disabled = false;
+            }
+        });
+
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        if (disconnectBtn) disconnectBtn.addEventListener('click', async () => {
+            if (!confirm('Disconnect from the class website? You can connect again any time.')) return;
+            disconnectBtn.disabled = true;
+            try {
+                await postJson('/settings/hub/disconnect');
+                window.location.reload();
+            } catch (e) {
+                showMsg(e.message, false);
+                disconnectBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>

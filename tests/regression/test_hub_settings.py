@@ -3,7 +3,7 @@
 Students set the website address + class token inside the app instead of editing .env. The
 values are tested, saved to .env next to the app, and applied at once. Because the route changes
 where the class token is sent, it must refuse cross-site requests and anything that could inject
-extra lines into .env. APP_DIR is redirected to a temp folder so the real .env is never touched.
+extra lines into .env. DATA_DIR is redirected to a temp folder so the real .env is never touched.
 """
 import pytest
 
@@ -17,7 +17,7 @@ GOOD = {'base_url': 'https://class-site.example.com/', 'token': 'd9e965839b0a4c3
 
 @pytest.fixture
 def settings_env(tmp_path, monkeypatch):
-    monkeypatch.setattr(app_module, 'APP_DIR', str(tmp_path))
+    monkeypatch.setattr(app_module, 'DATA_DIR', str(tmp_path))
     calls = []
     monkeypatch.setattr(hub_client, 'check_connection', lambda url, tok: calls.append((url, tok)))
     # Leave the module-level config as we found it after each test.
@@ -94,3 +94,63 @@ def test_failed_connection_is_reported_and_not_saved(client, settings_env, monke
     resp = client.post('/settings/hub', json=GOOD)
     assert resp.status_code == 400 and 'did not accept that token' in resp.get_json()['error']
     assert not (tmp / '.env').exists()
+
+
+def test_blank_token_keeps_the_saved_one(client, settings_env):
+    tmp, calls = settings_env
+    client.post('/settings/hub', json=GOOD)
+    resp = client.post('/settings/hub', json={'base_url': 'https://new-site.example.com', 'token': ''})
+    assert resp.status_code == 200
+    assert calls[-1] == ('https://new-site.example.com', GOOD['token'])
+    env = (tmp / '.env').read_text(encoding='utf-8')
+    assert 'HUB_BASE_URL=https://new-site.example.com' in env and f"HUB_API_TOKEN={GOOD['token']}" in env
+
+
+def test_blank_token_with_nothing_saved_is_refused(client, settings_env, monkeypatch):
+    monkeypatch.setattr(hub_client, 'HUB_API_TOKEN', '')
+    resp = client.post('/settings/hub', json={'base_url': GOOD['base_url'], 'token': ''})
+    assert resp.status_code == 400 and 'token' in resp.get_json()['error']
+
+
+def test_disconnect_clears_saved_and_live_settings(client, settings_env):
+    tmp, _ = settings_env
+    client.post('/settings/hub', json=GOOD)
+    assert client.post('/settings/hub/disconnect', json={}).status_code == 200
+    env = (tmp / '.env').read_text(encoding='utf-8').splitlines()
+    assert 'HUB_BASE_URL=' in env and 'HUB_API_TOKEN=' in env
+    assert not hub_client.hub_enabled() and hub_client.HUB_API_TOKEN == ''
+    assert client.get('/settings/hub').get_json()['connected'] is False
+
+
+def test_disconnect_refuses_cross_site(client, settings_env):
+    client.post('/settings/hub', json=GOOD)
+    assert client.post('/settings/hub/disconnect', data={}).status_code == 415
+    assert client.post('/settings/hub/disconnect', json={}, headers={'Origin': 'https://evil.example'}).status_code == 403
+    assert hub_client.hub_enabled()
+
+
+def test_settings_page_and_hub_link(client, settings_env):
+    page = client.get('/settings').get_data(as_text=True)
+    assert 'id="connBtn"' in page and str(settings_env[0]) in page        # form + where settings live
+    client.post('/settings/hub', json=GOOD)
+    page = client.get('/settings').get_data(as_text=True)
+    assert 'Connected to' in page and GOOD['token'] not in page
+    hub = client.get('/hub').get_data(as_text=True)
+    assert 'href="/settings"' in hub and 'id="connBtn"' not in hub
+
+
+def test_settings_from_beside_an_old_exe_are_copied_once(tmp_path, monkeypatch):
+    """The downloaded app keeps settings in a per-user folder; files an older version kept next
+    to the exe are copied in on first start (and never overwrite newer ones)."""
+    old, new = tmp_path / 'exe_folder', tmp_path / 'user_settings'
+    old.mkdir()
+    (old / '.env').write_text('HUB_BASE_URL=https://old.example.com\n', encoding='utf-8')
+    (old / 'local_gallery.json').write_text('[]', encoding='utf-8')
+    monkeypatch.setattr(app_module, 'APP_DIR', str(old))
+    monkeypatch.setenv('IPD_DATA_DIR', str(new))
+    assert app_module._resolve_data_dir() == str(new)
+    assert (new / '.env').read_text(encoding='utf-8') == 'HUB_BASE_URL=https://old.example.com\n'
+    assert (new / 'local_gallery.json').exists()
+    (new / '.env').write_text('HUB_BASE_URL=https://newer.example.com\n', encoding='utf-8')
+    app_module._resolve_data_dir()                                           # second start
+    assert 'newer' in (new / '.env').read_text(encoding='utf-8')

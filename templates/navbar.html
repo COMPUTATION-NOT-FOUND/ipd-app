@@ -27,6 +27,9 @@
             <a href="/hub" class="sr-nav-link{% if request.path.startswith('/hub') %} is-active{% endif %}">
                 <i class="fas fa-share-nodes"></i> Hub
             </a>
+            <a href="/settings" class="sr-nav-link{% if request.path.startswith('/settings') %} is-active{% endif %}">
+                <i class="fas fa-sliders"></i> Settings
+            </a>
             <button type="button" id="themeToggle" class="sr-theme-toggle"
                     aria-label="Switch to light theme" aria-pressed="false">
                 <i class="fas fa-sun"></i>

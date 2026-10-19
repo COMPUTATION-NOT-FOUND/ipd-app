@@ -21,15 +21,56 @@ from logging_config import setup_logging
 # the os.environ reads later in this file (FLASK_SECRET_KEY etc.). This lets secrets
 # live in a git-ignored .env instead of being hard-coded in the WSGI file.
 # No-op if python-dotenv isn't installed or no .env exists.
-# Where the app's files live. Normally both are this folder. In the bundled exe (PyInstaller),
-# code, templates and static files are unpacked to a temporary folder (RESOURCE_DIR) that is
-# deleted when the app closes, so the user's own files (.env, gallery caches, saved strategies)
-# live next to the exe instead (APP_DIR), where they survive restarts.
+# Where the app's files live. From source, all of these are this folder. In the bundled exe
+# (PyInstaller), code, templates and static files are unpacked to a temporary folder
+# (RESOURCE_DIR) that is deleted when the app closes; the exe itself sits in APP_DIR; and the
+# user's own files (.env, gallery caches, saved strategies) live in DATA_DIR, a per-user
+# settings folder, so they survive restarts, updates and moving the exe (see _resolve_data_dir).
 if getattr(sys, 'frozen', False):
     APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
     RESOURCE_DIR = getattr(sys, '_MEIPASS', APP_DIR)
 else:
     APP_DIR = RESOURCE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Files the app writes and must remember: .env (class website connection), saved Local
+# strategies and the gallery caches.
+_DATA_FILES = ('.env', 'local_gallery.json', 'strategy_cache.json', 'practice_cache.json')
+
+
+def _user_data_dir():
+    """The OS's per-user settings folder, so the downloaded app remembers its settings no matter
+    which folder (or which version of) the exe is started from."""
+    if sys.platform == 'win32':
+        return os.path.join(os.environ.get('APPDATA') or os.path.expanduser('~'), 'IPD Practice App')
+    if sys.platform == 'darwin':
+        return os.path.expanduser('~/Library/Application Support/IPD Practice App')
+    return os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'), 'ipd-app')
+
+
+def _resolve_data_dir():
+    """Where DATA_FILES live. From source: the repo folder (as always). The exe: the per-user
+    folder, copying in once any files an older exe kept next to itself. IPD_DATA_DIR overrides
+    both (used by tests). Falls back to the app's folder if the per-user one can't be created."""
+    override = os.environ.get('IPD_DATA_DIR', '').strip()
+    if override:
+        target = override
+    elif getattr(sys, 'frozen', False):
+        target = _user_data_dir()
+    else:
+        return APP_DIR
+    try:
+        os.makedirs(target, exist_ok=True)
+        import shutil
+        for name in _DATA_FILES:
+            old, new = os.path.join(APP_DIR, name), os.path.join(target, name)
+            if os.path.isfile(old) and not os.path.exists(new):
+                shutil.copy2(old, new)
+        return target
+    except OSError:
+        return APP_DIR
+
+
+DATA_DIR = _resolve_data_dir()
 
 try:
     from dotenv import load_dotenv
@@ -38,7 +79,7 @@ try:
     # load_dotenv() (which searches CWD) silently finds nothing and leaves
     # FLASK_SECRET_KEY unset -> the app crashes on import. An absolute path makes
     # the load independent of the working directory.
-    _env_path = os.path.join(APP_DIR, '.env')
+    _env_path = os.path.join(DATA_DIR, '.env')
     load_dotenv(_env_path)
 except ImportError:
     pass
@@ -1213,7 +1254,7 @@ def hub_publish_result():
 # Local strategy cache: fetched strategies persist here so the gallery works offline.
 # It is ONLY refreshed when the user presses Refresh (POST /hub/refresh); every other
 # read serves from this file. git-ignored, local-only, holds public strategy source.
-STRATEGY_CACHE_PATH = os.path.join(APP_DIR, 'strategy_cache.json')
+STRATEGY_CACHE_PATH = os.path.join(DATA_DIR, 'strategy_cache.json')
 
 
 def _read_strategy_cache():
@@ -1232,7 +1273,7 @@ def _write_strategy_cache(strategies):
 
 # Organizer-provided PRACTICE strategies are cached separately from player submissions
 # (two galleries: player submissions vs organizer practice code).
-PRACTICE_CACHE_PATH = os.path.join(APP_DIR, 'practice_cache.json')
+PRACTICE_CACHE_PATH = os.path.join(DATA_DIR, 'practice_cache.json')
 
 
 def _read_practice_cache():
@@ -1253,7 +1294,7 @@ def _write_practice_cache(strategies):
 # the Hub caches above (which mirror the website), this is purely local and private — it never
 # leaves the machine and is git-ignored. It gives the "Save to Gallery" button something real to
 # do in the local app (the website-backed save it used to call lives only in ipd-hub now).
-LOCAL_GALLERY_PATH = os.path.join(APP_DIR, 'local_gallery.json')
+LOCAL_GALLERY_PATH = os.path.join(DATA_DIR, 'local_gallery.json')
 
 
 def _read_local_gallery():
@@ -1281,8 +1322,8 @@ def hub():
 
 
 # --- "Connect to the class website" (Hub page form) ---------------------------------------
-# Lets a student set the website address + class token from inside the app instead of editing
-# .env by hand. The values are saved to .env next to the app/exe (APP_DIR) and applied at once.
+# Lets a student set the website address + class token from inside the app (Settings page)
+# instead of editing .env by hand. The values are saved to DATA_DIR/.env and applied at once.
 #
 # This changes where the app sends the class token and fetches code from, so it must only be
 # reachable from the app's own page: any website the student visits can send requests to
@@ -1295,13 +1336,13 @@ _HUB_TOKEN_RE = re.compile(r'^[A-Za-z0-9_\-]{8,200}$')
 
 
 def _save_env_values(values):
-    """Set KEY=value lines in APP_DIR/.env, keeping every other line; written atomically."""
-    path = os.path.join(APP_DIR, '.env')
+    """Set KEY=value lines in DATA_DIR/.env, keeping every other line; written atomically."""
+    path = os.path.join(DATA_DIR, '.env')
     try:
         with open(path, 'r', encoding='utf-8') as f:
             lines = f.read().splitlines()
     except FileNotFoundError:
-        lines = ['# Settings for the IPD practice app (saved by the Hub page).']
+        lines = ['# Settings for the IPD practice app (saved by the Settings page).']
     remaining = dict(values)
     for i, line in enumerate(lines):
         key = line.split('=', 1)[0].strip()
@@ -1314,17 +1355,9 @@ def _save_env_values(values):
     os.replace(tmp, path)
 
 
-@app.route('/settings/hub', methods=['GET', 'POST'])
-@login_required
-@limiter.limit("20 per minute", methods=['POST'])
-def hub_settings():
-    """GET: connection status (never the token). POST {base_url, token}: test, save, apply."""
-    import hub_client
-    global HUB_BASE_URL, HUB_API_TOKEN
-    if request.method == 'GET':
-        return jsonify({'connected': hub_client.hub_enabled() and bool(hub_client.HUB_API_TOKEN),
-                        'base_url': hub_client.HUB_BASE_URL})
-
+def _settings_write_guard():
+    """Only the app's own page may change the connection (see the block comment above). Returns
+    an error response to send back, or None when the request may proceed."""
     if request.host.rsplit(':', 1)[0] not in ('127.0.0.1', 'localhost'):
         abort(403)
     origin = request.headers.get('Origin')
@@ -1332,10 +1365,47 @@ def hub_settings():
         abort(403)
     if not request.is_json:
         return jsonify({'error': 'Expected JSON.'}), 415
+    return None
+
+
+def _apply_hub_settings(base_url, token):
+    """Use these website settings for the rest of this session (saving is separate)."""
+    import hub_client
+    global HUB_BASE_URL, HUB_API_TOKEN
+    os.environ['HUB_BASE_URL'], os.environ['HUB_API_TOKEN'] = base_url, token
+    HUB_BASE_URL, HUB_API_TOKEN = base_url, token
+    hub_client.configure(base_url, token)
+
+
+@app.route('/settings', methods=['GET'])
+@login_required
+def settings_page():
+    """Settings tab: the class website connection (and where settings are kept)."""
+    import hub_client
+    return render_template('settings.html', hub_enabled=hub_client.hub_enabled(),
+                           hub_base_url=hub_client.HUB_BASE_URL,
+                           hub_has_token=bool(hub_client.HUB_API_TOKEN),
+                           data_dir=DATA_DIR)
+
+
+@app.route('/settings/hub', methods=['GET', 'POST'])
+@login_required
+@limiter.limit("20 per minute", methods=['POST'])
+def hub_settings():
+    """GET: connection status (never the token). POST {base_url, token}: test, save, apply.
+    A blank token keeps the saved one, so the address can be changed without re-typing it."""
+    import hub_client
+    if request.method == 'GET':
+        return jsonify({'connected': hub_client.hub_enabled() and bool(hub_client.HUB_API_TOKEN),
+                        'base_url': hub_client.HUB_BASE_URL})
+
+    refused = _settings_write_guard()
+    if refused:
+        return refused
 
     data = request.get_json(silent=True) or {}
     base_url = str(data.get('base_url') or '').strip().rstrip('/')
-    token = str(data.get('token') or '').strip()
+    token = str(data.get('token') or '').strip() or hub_client.HUB_API_TOKEN
     if len(base_url) > 200 or not _HUB_URL_RE.match(base_url):
         return jsonify({'error': 'Enter the website address in full, e.g. '
                                  'https://your-class-site.pythonanywhere.com'}), 400
@@ -1343,6 +1413,8 @@ def hub_settings():
     if base_url.startswith('http://') and host not in ('127.0.0.1', 'localhost'):
         return jsonify({'error': 'The address must start with https:// (the token must not be '
                                  'sent unencrypted).'}), 400
+    if not token:
+        return jsonify({'error': 'Enter the class token your instructor gave you.'}), 400
     if not _HUB_TOKEN_RE.match(token):
         return jsonify({'error': 'That token looks wrong: it should be one long run of letters '
                                  'and numbers, exactly as your instructor gave it.'}), 400
@@ -1352,18 +1424,32 @@ def hub_settings():
     except hub_client.HubError as e:
         return jsonify({'error': str(e)}), 400
 
+    # The connection was verified, so use it for this session even if saving fails.
+    _apply_hub_settings(base_url, token)
     try:
         _save_env_values({'HUB_BASE_URL': base_url, 'HUB_API_TOKEN': token})
     except OSError as e:
         app.logger.error(f"Could not save .env: {e}")
-        return jsonify({'error': "Connected, but the settings couldn't be saved next to the app "
-                                 "(is the folder read-only?). They will work until you close it."}), 500
-    finally:
-        # Apply for this session either way (the connection was verified).
-        os.environ['HUB_BASE_URL'], os.environ['HUB_API_TOKEN'] = base_url, token
-        HUB_BASE_URL, HUB_API_TOKEN = base_url, token
-        hub_client.configure(base_url, token)
+        return jsonify({'error': "Connected, but the settings couldn't be saved (is the settings "
+                                 "folder read-only?). They will work until you close the app."}), 500
     return jsonify({'success': True, 'base_url': base_url})
+
+
+@app.route('/settings/hub/disconnect', methods=['POST'])
+@login_required
+@limiter.limit("20 per minute")
+def hub_settings_disconnect():
+    """Forget the class website: clear the saved address and token."""
+    refused = _settings_write_guard()
+    if refused:
+        return refused
+    _apply_hub_settings('', '')
+    try:
+        _save_env_values({'HUB_BASE_URL': '', 'HUB_API_TOKEN': ''})
+    except OSError as e:
+        app.logger.error(f"Could not save .env: {e}")
+        return jsonify({'error': "Disconnected for now, but the change couldn't be saved."}), 500
+    return jsonify({'success': True})
 
 
 @app.route('/hub/list', methods=['GET'])

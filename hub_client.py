@@ -44,8 +44,7 @@ def _headers():
 
 def _require_enabled():
     if not hub_enabled():
-        raise HubError('Not connected to the class website yet. Open the Hub page and use '
-                       '"Connect to the class website".')
+        raise HubError('Not connected to the class website yet. Connect on the Settings page.')
 
 
 def configure(base_url, token):
