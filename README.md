@@ -20,8 +20,8 @@ There are two ways to run the app. Pick one.
 1. Open the repository's **Releases** page on GitHub (your instructor gives you the link) and
    download the file for your computer: `ipd-app-windows.exe`, `ipd-app-macos` or `ipd-app-linux`.
 2. Put it in **its own folder**. The app keeps your saved strategies and settings next to itself.
-3. *(Optional — to connect to the class website)* also download `.env.example` into that folder,
-   rename it to `.env`, and fill in the two values your instructor gives you (see Step 3 below).
+3. *(Optional — to connect to the class website)* also download `env.example` into that folder,
+   rename it to `.env` (with the leading dot), and fill in the two values your instructor gives you (see Step 3 below).
 4. **Double-click it.** Your browser opens at **http://127.0.0.1:5000**. Keep the black window open
    while you use the app; close it to stop.
 
@@ -245,7 +245,7 @@ submission, results, all the secrets). This app has **no Firebase and no keys** 
   with `pip install -r requirements-build.txt` then `python build_exe.py` (→ `dist/`; builds for the
   OS you run it on). To publish all three downloads, push a version tag —
   `git tag v1.0.0 && git push origin v1.0.0` — and `.github/workflows/build-app.yml` runs the tests,
-  builds Windows/macOS/Linux, and attaches them with `.env.example` to a GitHub Release. The `.env`
+  builds Windows/macOS/Linux, and attaches them with `env.example` to a GitHub Release. The `.env`
   is never bundled (anything inside an exe can be unpacked, and the class token must stay private).
 
 > **Scoring:** `Score = (win_rate·W_win + cooperation·W_coop + points·W_points) × 100`, where
