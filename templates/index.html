@@ -1281,7 +1281,7 @@
         function addStrategyToWebsite(id) {
              const name = document.getElementById(`strategyName${id}`).value || '';
              const code = document.getElementById(`strategyCode${id}`).value || '';
-             if (!HUB_BASE_URL) { alert('No class website configured (set HUB_BASE_URL in your .env).'); return; }
+             if (!HUB_BASE_URL) { alert('Not connected to the class website yet: open the Hub page and use "Connect to the class website".'); return; }
              if (!name.trim() || !code.trim()) { alert('Enter a strategy name and code first.'); return; }
              const url = HUB_BASE_URL.replace(/\/$/, '')
                  + '/save-strategy?name=' + encodeURIComponent(name)
@@ -1389,13 +1389,13 @@
             if (playerRows.length === 0 && botRows.length === 0 && practiceRows.length === 0 && localRows.length === 0) {
                 c.innerHTML = `<div class="part-empty" style="padding:14px; line-height:1.5;">
                     <i class="fas fa-circle-info"></i> The class gallery is empty.
-                    To fetch classmates' strategies, bots and practice code, set
-                    <code>HUB_BASE_URL</code> and <code>HUB_API_TOKEN</code> in your <code>.env</code>
-                    (ask your instructor), then press <strong>Refresh Gallery</strong>.
+                    To fetch classmates' strategies, bots and practice code,
+                    <a href="/hub#connect"><strong>connect to the class website</strong></a> on the Hub page
+                    (your instructor gives you the address and token), then press <strong>Refresh Gallery</strong>.
                     You can still run tournaments with your own strategies and any you've saved locally.
                 </div>`;
                 const emptyStatus = document.getElementById(statusId);
-                if (emptyStatus) emptyStatus.innerText = 'Gallery empty — configure the Hub and Refresh.';
+                if (emptyStatus) emptyStatus.innerText = 'Gallery empty — connect to the class website on the Hub page.';
                 return;
             }
 

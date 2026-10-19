@@ -20,10 +20,11 @@ There are two ways to run the app. Pick one.
 1. Open the repository's **Releases** page on GitHub (your instructor gives you the link) and
    download the file for your computer: `ipd-app-windows.exe`, `ipd-app-macos` or `ipd-app-linux`.
 2. Put it in **its own folder**. The app keeps your saved strategies and settings next to itself.
-3. *(Optional — to connect to the class website)* also download `env.example` into that folder,
-   rename it to `.env` (with the leading dot), and fill in the two values your instructor gives you (see Step 3 below).
-4. **Double-click it.** Your browser opens at **http://127.0.0.1:5000**. Keep the black window open
+3. **Double-click it.** Your browser opens at **http://127.0.0.1:5000**. Keep the black window open
    while you use the app; close it to stop.
+4. *(To connect to the class website)* open the **Hub** tab, fill in **Connect to the class website**
+   with the address and class token your instructor gives you, and press **Connect**. The app tests
+   them, remembers them (in a `.env` file next to itself), and loads your classmates' strategies.
 
 > - **Windows** may say *"Windows protected your PC"* because the file isn't code-signed: click
 >   **More info → Run anyway** (only the first time).
@@ -82,8 +83,9 @@ pip install -r requirements.txt
 > `pip install --default-timeout=100 --retries 10 -r requirements.txt`.
 
 **Step 3 — connect to the class website (optional).** The app works fully offline. To see
-classmates' strategies and submit your own, copy the example config and add the two values your
-instructor gives you:
+classmates' strategies and submit your own, the easiest way is in the app: after Step 4, open the
+**Hub** tab and fill in **Connect to the class website**. Or set it up by hand — copy the example
+config and add the two values your instructor gives you:
 
 ```bash
 cp .env.example .env                # Windows (PowerShell): copy .env.example .env

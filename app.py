@@ -1276,7 +1276,94 @@ def hub():
     """Browse / import strategies fetched from the website, and submit/publish via handoff."""
     import hub_client
     return render_template('hub.html', hub_enabled=hub_client.hub_enabled(),
-                           hub_base_url=hub_client.HUB_BASE_URL)
+                           hub_base_url=hub_client.HUB_BASE_URL,
+                           hub_has_token=bool(hub_client.HUB_API_TOKEN))
+
+
+# --- "Connect to the class website" (Hub page form) ---------------------------------------
+# Lets a student set the website address + class token from inside the app instead of editing
+# .env by hand. The values are saved to .env next to the app/exe (APP_DIR) and applied at once.
+#
+# This changes where the app sends the class token and fetches code from, so it must only be
+# reachable from the app's own page: any website the student visits can send requests to
+# 127.0.0.1. Hence: JSON only (a cross-site form can't send JSON without a CORS preflight, which
+# this app never grants), the Origin header (if sent) must be this app, and the Host must be
+# loopback (blocks DNS-rebinding). Values are validated strictly so nothing can be injected into
+# .env, and the connection is tested before anything is saved.
+_HUB_URL_RE = re.compile(r'^https?://[A-Za-z0-9.\-]+(:\d{1,5})?(/[A-Za-z0-9._~\-/]*)?$')
+_HUB_TOKEN_RE = re.compile(r'^[A-Za-z0-9_\-]{8,200}$')
+
+
+def _save_env_values(values):
+    """Set KEY=value lines in APP_DIR/.env, keeping every other line; written atomically."""
+    path = os.path.join(APP_DIR, '.env')
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        lines = ['# Settings for the IPD practice app (saved by the Hub page).']
+    remaining = dict(values)
+    for i, line in enumerate(lines):
+        key = line.split('=', 1)[0].strip()
+        if '=' in line and not line.lstrip().startswith('#') and key in remaining:
+            lines[i] = f'{key}={remaining.pop(key)}'
+    lines.extend(f'{k}={v}' for k, v in remaining.items())
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(lines) + '\n')
+    os.replace(tmp, path)
+
+
+@app.route('/settings/hub', methods=['GET', 'POST'])
+@login_required
+@limiter.limit("20 per minute", methods=['POST'])
+def hub_settings():
+    """GET: connection status (never the token). POST {base_url, token}: test, save, apply."""
+    import hub_client
+    global HUB_BASE_URL, HUB_API_TOKEN
+    if request.method == 'GET':
+        return jsonify({'connected': hub_client.hub_enabled() and bool(hub_client.HUB_API_TOKEN),
+                        'base_url': hub_client.HUB_BASE_URL})
+
+    if request.host.rsplit(':', 1)[0] not in ('127.0.0.1', 'localhost'):
+        abort(403)
+    origin = request.headers.get('Origin')
+    if origin and origin != f'{request.scheme}://{request.host}':
+        abort(403)
+    if not request.is_json:
+        return jsonify({'error': 'Expected JSON.'}), 415
+
+    data = request.get_json(silent=True) or {}
+    base_url = str(data.get('base_url') or '').strip().rstrip('/')
+    token = str(data.get('token') or '').strip()
+    if len(base_url) > 200 or not _HUB_URL_RE.match(base_url):
+        return jsonify({'error': 'Enter the website address in full, e.g. '
+                                 'https://your-class-site.pythonanywhere.com'}), 400
+    host = base_url.split('://', 1)[1].split('/', 1)[0].split(':', 1)[0]
+    if base_url.startswith('http://') and host not in ('127.0.0.1', 'localhost'):
+        return jsonify({'error': 'The address must start with https:// (the token must not be '
+                                 'sent unencrypted).'}), 400
+    if not _HUB_TOKEN_RE.match(token):
+        return jsonify({'error': 'That token looks wrong: it should be one long run of letters '
+                                 'and numbers, exactly as your instructor gave it.'}), 400
+
+    try:
+        hub_client.check_connection(base_url, token)
+    except hub_client.HubError as e:
+        return jsonify({'error': str(e)}), 400
+
+    try:
+        _save_env_values({'HUB_BASE_URL': base_url, 'HUB_API_TOKEN': token})
+    except OSError as e:
+        app.logger.error(f"Could not save .env: {e}")
+        return jsonify({'error': "Connected, but the settings couldn't be saved next to the app "
+                                 "(is the folder read-only?). They will work until you close it."}), 500
+    finally:
+        # Apply for this session either way (the connection was verified).
+        os.environ['HUB_BASE_URL'], os.environ['HUB_API_TOKEN'] = base_url, token
+        HUB_BASE_URL, HUB_API_TOKEN = base_url, token
+        hub_client.configure(base_url, token)
+    return jsonify({'success': True, 'base_url': base_url})
 
 
 @app.route('/hub/list', methods=['GET'])

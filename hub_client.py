@@ -44,7 +44,35 @@ def _headers():
 
 def _require_enabled():
     if not hub_enabled():
-        raise HubError('Website is not configured. Set HUB_BASE_URL in your .env.')
+        raise HubError('Not connected to the class website yet. Open the Hub page and use '
+                       '"Connect to the class website".')
+
+
+def configure(base_url, token):
+    """Point this client at a website for the rest of the session (the Hub page's
+    "Connect to the class website" form; app.py also saves the values to .env)."""
+    global HUB_BASE_URL, HUB_API_TOKEN
+    HUB_BASE_URL = (base_url or '').strip().rstrip('/')
+    HUB_API_TOKEN = (token or '').strip()
+
+
+def check_connection(base_url, token):
+    """Try the website with these details before they are saved. Raises HubError with a
+    message a student can act on; returns None when the website accepts the token."""
+    url = f"{base_url.rstrip('/')}/api/strategies"
+    try:
+        resp = requests.get(url, headers={'Accept': 'application/json',
+                                          'Authorization': f'Bearer {token}'}, timeout=_TIMEOUT)
+    except requests.RequestException:
+        raise HubError('Could not reach that address. Check it is typed correctly and that '
+                       'you are online.')
+    if resp.status_code == 401:
+        raise HubError('The website did not accept that token. Check it with your instructor.')
+    if resp.status_code == 404:
+        raise HubError("That address doesn't look like the class website (no strategy list "
+                       "there). Check it with your instructor.")
+    if resp.status_code != 200:
+        raise HubError(f'The website answered with an error ({resp.status_code}). Try again later.')
 
 
 def list_strategies():
