@@ -475,9 +475,19 @@ def check_unique_strategy_names(strategies):
         key = name.lower()
         if key in seen:
             return False, (f"Duplicate strategy name: '{name}'. Each strategy must have a "
-                           f"different name (names are used to identify entries in the results).")
+                           f"different name (names are used to identify entries in the results). "
+                           f"Check your editor boxes and the entries ticked in the gallery, "
+                           f"including saved Local ones.")
         seen.add(key)
     return True, ""
+
+
+def _screening_shortfall(flags):
+    """400 response when screening leaves fewer than 2 strategies; `flags` names each one and why."""
+    n = len(flags)
+    return jsonify({'error': f"Screening left out {n} {'strategy' if n == 1 else 'strategies'} "
+                             f"(see below for which and why), so fewer than 2 remain to run.",
+                    'flags': flags, 'screened': True}), 400
 
 
 # Modules that user strategies are permitted to import. Single source of truth lives in
@@ -1502,7 +1512,9 @@ def round_robin_tournament(strategies, rounds=200, payoff_matrix=None, modes=Non
     strategies = sorted(strategies, key=lambda s: (s['name'], s.get('user_id', '')))
     
     if len(strategies) < 2:
-        error_msg = f"Not enough valid strategies to run tournament. {len(disqualified_strategies)} were disqualified."
+        n_dq = len(disqualified_strategies)
+        error_msg = (f"Not enough valid strategies to run the tournament: {n_dq} "
+                     f"{'was' if n_dq == 1 else 'were'} disqualified (see below for which and why).")
         app.logger.error(error_msg)
         return {
             'leaderboard': [],
@@ -1846,8 +1858,7 @@ def run_tournament():
         import isolation
         survivors, screen_flags = isolation.screen_strategies(strategies)
         if len(survivors) < 2:
-            return jsonify({'error': 'Isolated screening flagged too many strategies — fewer than 2 '
-                                     'remain to run.', 'flags': screen_flags, 'screened': True}), 400
+            return _screening_shortfall(screen_flags)
         strategies = survivors
 
     # Game modes (1v1 supports the same modes as N-player). Accept a `modes` list and
@@ -2031,8 +2042,7 @@ def nplayer_tournament():
         import isolation
         survivors, screen_flags = isolation.screen_strategies(strategies)
         if len(survivors) < 2:
-            return jsonify({'error': 'Isolated screening flagged too many strategies — fewer than 2 '
-                                     'remain to run.', 'flags': screen_flags, 'screened': True}), 400
+            return _screening_shortfall(screen_flags)
         strategies = survivors
 
     # Parse and validate strategy code

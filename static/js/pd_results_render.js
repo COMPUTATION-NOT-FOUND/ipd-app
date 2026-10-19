@@ -27,8 +27,42 @@ const pdChartInstancesByContainer = new WeakMap();
 // hardcoding hex means a light/dark switch recolors the charts; see the themechange listener
 // at the bottom of this file for what happens to charts already on screen when it flips.
 
-// Compute the per-strategy weighted-score breakdown from the stored leaderboard, mirroring the
-// formula used on the results page (win_rate*Wwin + cooperation*Wcoop + points*Wpoints) * 100.
+// Weighted score for ONE leaderboard entry: (win_rate*Wwin + cooperation*Wcoop + points*Wpts)*100.
+// The single formula behind every Score shown (leaderboard tables, charts, Recalculate), matching
+// the server's determine_weighted_results in app.py so a published result ranks the same way:
+// cooperation uses the normalised % when present, points the server's points_percentage (avg
+// points per round as a % of the best possible). `maxPayoff` is only the fallback for older
+// results that carry no points_percentage.
+function pdScoreEntry(e, wWin, wCoop, wPts, maxPayoff) {
+    const totalGames = (e.wins || 0) + (e.draws || 0) + (e.losses || 0);
+    const winRateScore = totalGames > 0 ? (e.wins || 0) / totalGames : 0;
+    const coopScore = Math.min(1, (e.norm_cooperation_percentage !== undefined && e.norm_cooperation_percentage !== null
+        ? e.norm_cooperation_percentage : (e.cooperation_percentage || 0)) / 100);
+    let avgPPR = 0;
+    if (e.total_raw_points !== undefined && e.total_moves > 0) avgPPR = e.total_raw_points / e.total_moves;
+    else avgPPR = totalGames > 0 ? (e.total_points || 0) / totalGames : 0;
+    let pointsScore;
+    if (typeof e.points_percentage === 'number') pointsScore = Math.max(0, Math.min(1, e.points_percentage / 100));
+    else pointsScore = maxPayoff > 0 ? Math.max(0, Math.min(1, avgPPR / maxPayoff)) : 0;
+    const weightedScore = (winRateScore * wWin + coopScore * wCoop + pointsScore * wPts) * 100;
+    return { weightedScore, avgPPR, winRateScore, pointsScore, coopScore };
+}
+
+// Rank labels with ties shown as "=": equal scores share the rank of the first of them
+// ("1", "=2", "=2", "4"). `scores` must already be sorted high to low.
+function pdRankLabels(scores) {
+    const eps = 1e-9;
+    return scores.map((s, i) => {
+        let first = i;
+        while (first > 0 && Math.abs(scores[first - 1] - s) <= eps) first--;
+        const tied = (i > 0 && Math.abs(scores[i - 1] - s) <= eps)
+            || (i + 1 < scores.length && Math.abs(scores[i + 1] - s) <= eps);
+        return (tied ? '=' : '') + (first + 1);
+    });
+}
+
+// Compute the per-strategy weighted-score breakdown from the stored leaderboard (pdScoreEntry
+// per entry), sorted best first.
 function pdComputeScores(tournament) {
     const leaderboard = Array.isArray(tournament.leaderboard) ? tournament.leaderboard : [];
     const w = tournament.weights || {};
@@ -43,19 +77,9 @@ function pdComputeScores(tournament) {
         if (maxVal > 0) maxPayoff = maxVal;
     }
     const scored = leaderboard.map(e => {
-        const totalGames = (e.wins || 0) + (e.draws || 0) + (e.losses || 0);
-        const winRateScore = totalGames > 0 ? (e.wins || 0) / totalGames : 0;
-        const coopScore = (e.norm_cooperation_percentage !== undefined
-            ? e.norm_cooperation_percentage : (e.cooperation_percentage || 0)) / 100;
-        let avgPPR = 0;
-        if (e.total_raw_points !== undefined && e.total_moves > 0) avgPPR = e.total_raw_points / e.total_moves;
-        else avgPPR = totalGames > 0 ? e.total_points / totalGames : 0;
-        const pointsScore = maxPayoff > 0 ? Math.min(1, avgPPR / maxPayoff) : 0;
-        const weightedScore = (winRateScore * wWin + coopScore * wCoop + pointsScore * wPts) * 100;
-        return Object.assign({}, e, {
-            weightedScore, avgPPR, winRateScore, pointsScore,
-            coopScore: Math.min(1, coopScore),
-            coopPct: e.cooperation_percentage != null ? e.cooperation_percentage : coopScore * 100,
+        const s = pdScoreEntry(e, wWin, wCoop, wPts, maxPayoff);
+        return Object.assign({}, e, s, {
+            coopPct: e.cooperation_percentage != null ? e.cooperation_percentage : s.coopScore * 100,
         });
     }).sort((a, b) => b.weightedScore - a.weightedScore);
     return { scored, weights: { wWin, wCoop, wPts } };
@@ -65,14 +89,15 @@ function pdComputeScores(tournament) {
 function pdBuildH2H(el, names, matches) {
     if (!el) return;
     // Index results by ordered pair.
-    const cell = {};  // cell["A|B"] = 'W'|'L'|'D' from A's perspective
+    // A draw is shown as "=", not "D": everywhere else in the app D means Defect.
+    const cell = {};  // cell["A|B"] = 'W'|'L'|'=' from A's perspective
     matches.forEach(m => {
         const a = m.player_a, b = m.player_b;
         if (!a || !b) return;
         let ra, rb;
         if (m.winner === 'A' || m.winner === a) { ra = 'W'; rb = 'L'; }
         else if (m.winner === 'B' || m.winner === b) { ra = 'L'; rb = 'W'; }
-        else { ra = 'D'; rb = 'D'; }
+        else { ra = '='; rb = '='; }
         cell[a + '|' + b] = ra;
         cell[b + '|' + a] = rb;
     });
@@ -81,7 +106,7 @@ function pdBuildH2H(el, names, matches) {
     const colour = {
         W: srAlpha(srToken('--color-success', '#4ade80'), 45),
         L: srAlpha(srToken('--color-danger', '#fb7185'), 38),
-        D: srAlpha(srToken('--color-ink-faint', '#6b6e76'), 28),
+        '=': srAlpha(srToken('--color-ink-faint', '#6b6e76'), 28),
     };
     let html = '<table class="leaderboard-table" style="font-size:0.85em;"><thead><tr><th></th>';
     names.forEach(n => { html += `<th title="${pdEsc(n)}" style="max-width:90px; overflow:hidden; text-overflow:ellipsis;">${pdEsc(n)}</th>`; });
@@ -95,7 +120,7 @@ function pdBuildH2H(el, names, matches) {
         });
         html += '</tr>';
     });
-    html += '</tbody></table><p style="color:var(--text-secondary); font-size:0.8em; margin-top:6px;">Each cell is the row strategy\'s result against the column strategy (W/L/D).</p>';
+    html += '</tbody></table><p style="color:var(--text-secondary); font-size:0.8em; margin-top:6px;">Each cell is the row strategy\'s result against the column strategy (W = win, L = loss, = draw).</p>';
     el.innerHTML = html;
 }
 

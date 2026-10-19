@@ -586,6 +586,49 @@
             return await response.json();
         }
 
+        // Shared HTML escaper for anything built into innerHTML.
+        function escHtml(s) {
+            return String(s == null ? '' : s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+        }
+
+        // "1 match" / "3 matches".
+        function plural(n, one, many) { return `${n} ${n === 1 ? one : (many || one + 's')}`; }
+
+        // A boxed list of strategies with the reason each one was left out or failed.
+        // `items` is [{name, reason|error, detail?}].
+        function strategyIssuesHtml(title, items, colorVar) {
+            if (!Array.isArray(items) || items.length === 0) return '';
+            const rows = items.map(it => `<li><strong>${escHtml(it.name)}</strong>: ${escHtml(it.reason || it.error || '')}`
+                + (it.detail ? ` <span style="color:var(--text-secondary);">(${escHtml(it.detail)})</span>` : '') + `</li>`).join('');
+            return `<div style="border: 2px solid var(${colorVar}); padding: 12px 15px; border-radius: 8px; margin-bottom: 16px;">
+                    <h4 style="margin: 0 0 8px 0; color: var(${colorVar});"><i class="fas fa-exclamation-triangle"></i> ${title}</h4>
+                    <ul style="margin: 0; padding-left: 20px;">${rows}</ul></div>`;
+        }
+
+        // Strategies that failed DURING the run (crash, infinite loop, or a move other than 'C'/'D').
+        // They forfeit their matches; this says which ones and why.
+        function runtimeErrorsHtml(items) {
+            return strategyIssuesHtml(`${plural((items || []).length, 'strategy', 'strategies')} failed during the run and forfeited`,
+                                      items, '--danger-color');
+        }
+
+        // Show a failed run: the server's message plus every per-strategy detail it sent
+        // (disqualified by the safety check, flagged by screening), then scroll it into view so
+        // the user sees it right after pressing Start.
+        function showRunError(containerId, result, fallbackMsg) {
+            const el = document.getElementById(containerId);
+            if (!el) return;
+            const r = result || {};
+            const msg = r.error ? String(r.error) : (fallbackMsg || 'The run failed.');
+            el.innerHTML = `<div class="results" style="border-left: 4px solid var(--danger-color);">
+                    <p style="color: var(--danger-color); margin-top: 0;"><i class="fas fa-times-circle"></i> ${escHtml(msg)}</p>
+                    ${strategyIssuesHtml('Disqualified by the safety check', r.disqualified, '--danger-color')}
+                    ${strategyIssuesHtml('Left out by screening', r.flags, '--warning-color')}
+                </div>`;
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
         // Legacy practice caps from when simulations ran on the hosted free tier. Nothing reads
         // these to block a run any more (every add-strategy path is explicitly uncapped, and the
         // server-side /os-simulation route no longer caps either) -- runs happen on the user's own
@@ -779,7 +822,7 @@
             el.insertAdjacentHTML('afterbegin',
                 `<div class="results" style="border:1px solid var(--warning-color); background: rgba(234,179,8,0.10); margin-bottom:16px;">
                     <h4 style="margin:0 0 8px 0; color: var(--warning-color);">
-                        <i class="fas fa-flag"></i> ${flags.length} strategy(ies) flagged and excluded by isolated screening</h4>
+                        <i class="fas fa-flag"></i> ${plural(flags.length, 'strategy', 'strategies')} flagged and left out by screening</h4>
                     <ul style="margin:0 0 0 18px;">${rows}</ul>
                 </div>`);
         }
@@ -843,8 +886,8 @@
             const flaggable = (Array.isArray(result && result.flags) ? result.flags : [])
                 .filter(f => f.website_id);
             const flagNote = flaggable.length
-                ? `<p style="color:var(--warning-color);"><i class="fas fa-flag"></i> ${flaggable.length}
-                   screened-out strategy(ies) from the website will be <strong>flagged</strong> there when
+                ? `<p style="color:var(--warning-color);"><i class="fas fa-flag"></i> ${plural(flaggable.length,
+                   'screened-out strategy', 'screened-out strategies')} from the website will be <strong>flagged</strong> there when
                    you confirm, so classmates see a warning on them.</p>`
                 : '';
             el.style.display = 'block';
@@ -889,7 +932,7 @@
                 if (!resp.ok) throw new Error(data.error || 'Publish failed');
                 window.open(data.publish_url, '_blank');
                 status.innerHTML = '<span style="color:var(--success-color)">Opened the website publish page — log in (admin) and confirm.</span>';
-            } catch (e) { status.innerHTML = '<span style="color:var(--danger-color)">' + e.message + '</span>'; }
+            } catch (e) { status.innerHTML = '<span style="color:var(--danger-color)">' + escHtml(e.message) + '</span>'; }
         }
 
         async function startTournament() {
@@ -934,14 +977,15 @@
             try {
                 const response = await fetch('/tournament', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(tournamentData) });
                 const result = await readJsonOrRedirect(response);
-                if (result.error) throw new Error(result.error);
+                // Keep the whole result on failure: it names the disqualified strategies and why.
+                if (!response.ok || result.error) { showRunError('results', result); return; }
                 currentTournamentResult = result;
                 lastRoster1v1 = roster;
                 displayTournamentResults(result);
                 renderFlagsBanner('results', result.flags);
                 showSubmitPanel('1v1', result, roster);
             } catch (error) {
-                document.getElementById('results').innerHTML = `<div class="results" style="color: var(--danger-color);"><i class="fas fa-times-circle"></i> Error: ${escapeHtml(error.message)}</div>`;
+                showRunError('results', null, 'Error: ' + error.message);
             } finally {
                 spinner.stop();
             }
@@ -968,30 +1012,32 @@
             const currentWinWeight = document.getElementById('winWeight') ? document.getElementById('winWeight').value : 33;
             const currentCoopWeight = document.getElementById('coopWeight') ? document.getElementById('coopWeight').value : 34;
             const currentPointsWeight = document.getElementById('pointsWeight') ? document.getElementById('pointsWeight').value : 33;
-            
+
+            // Score = the weighted formula with the current slider weights, computed on EVERY render
+            // (not only after Recalculate), using the same pdScoreEntry as the charts so the table
+            // and the "Weighted score" chart always agree.
+            result.leaderboard.forEach(e => {
+                e.weighted_score = pdScoreEntry(e, currentWinWeight / 100, currentCoopWeight / 100,
+                                                currentPointsWeight / 100, 5).weightedScore;
+            });
+            result.leaderboard.sort((a, b) => b.weighted_score - a.weighted_score);
+            const rankLabels = pdRankLabels(result.leaderboard.map(e => e.weighted_score));
+
             // Info line (mirrors the N-Player / OS-sim results header).
             const modesText = (Array.isArray(result.modes) && result.modes.length)
                 ? `, Modes: ${result.modes.join(', ')}` : '';
-            const roundsText = result.rounds ? `, ${result.rounds} rounds` : '';
+            const roundsText = result.rounds ? `, ${plural(Number(result.rounds), 'round')}` : '';
             let html = `
                 <div class="results" style="border-left: 4px solid var(--primary-color); background: var(--bg-card);">
                     <h3 style="color: var(--primary-color) !important;"><i class="fas fa-trophy"></i> 1v1 Results</h3>
                     <div style="background: rgba(0,0,0,0.2); padding: 10px; margin-bottom: 20px;">
-                        <strong>Info:</strong> ${result.leaderboard.length} strategies, ${result.matches.length} matches${roundsText}${modesText}
+                        <strong>Info:</strong> ${plural(result.leaderboard.length, 'strategy', 'strategies')}, ${plural(result.matches.length, 'match', 'matches')}${roundsText}${modesText}
                     </div>`;
 
-            // Display disqualified strategies if any
-            if (result.disqualified && result.disqualified.length > 0) {
-                html += `
-                    <div style="background: rgba(220, 53, 69, 0.2); border: 2px solid var(--danger-color); padding: 15px; border-radius: 8px; margin-bottom: 20px;">
-                        <h4 style="margin: 0 0 10px 0; color: var(--danger-color);"><i class="fas fa-exclamation-triangle"></i> Disqualified Strategies</h4>
-                        <ul style="margin: 0; padding-left: 20px;">`;
-                result.disqualified.forEach(disq => {
-                    html += `<li><strong>${escapeHtml(disq.name)}</strong>: ${escapeHtml(disq.error)}</li>`;
-                });
-                html += `</ul></div>`;
-            }
-            
+            // Strategies left out before the run (safety check), and ones that failed during it.
+            html += strategyIssuesHtml('Disqualified by the safety check', result.disqualified, '--danger-color');
+            html += runtimeErrorsHtml(result.runtime_errors);
+
             html += `
                     <div class="leaderboard">
                         <div style="background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px; margin-bottom: 15px;">
@@ -1017,13 +1063,17 @@
                             <tbody>`;
             
             result.leaderboard.forEach((entry, index) => {
+                // `?? 0`, not a truthiness test: a real 0 must show as 0.00 / 0.0%, not "N/A".
+                const failed = entry.error
+                    ? ` <span title="${escapeHtml(entry.error)}" style="color: var(--danger-color); font-size: 0.85em;"><i class="fas fa-exclamation-circle"></i> failed</span>`
+                    : '';
                 html += `<tr>
-                    <td>${index + 1}</td>
-                    <td>${escapeHtml(entry.name)}</td>
-                    <td>${entry.weighted_score ? entry.weighted_score.toFixed(2) : 'N/A'}</td>
-                    <td>${entry.total_points}</td>
-                    <td>${entry.wins}</td>
-                    <td>${entry.cooperation_percentage ? entry.cooperation_percentage.toFixed(1) : 'N/A'}%</td>
+                    <td title="${rankLabels[index].startsWith('=') ? 'Tied' : ''}">${rankLabels[index]}</td>
+                    <td>${escapeHtml(entry.name)}${failed}</td>
+                    <td>${Number(entry.weighted_score ?? 0).toFixed(2)}</td>
+                    <td>${Number(entry.total_points ?? 0).toFixed(2)}</td>
+                    <td>${entry.wins ?? 0}</td>
+                    <td>${Number(entry.cooperation_percentage ?? 0).toFixed(1)}%</td>
                 </tr>`;
             });
             html += `</tbody></table></div>
@@ -1041,7 +1091,7 @@
                 if (match.error) {
                     // Display error for this match
                     matchClass = 'match' + ' style="border-left: 4px solid var(--danger-color); background: rgba(220, 53, 69, 0.1);"';
-                    matchContent += `<span style="color: var(--danger-color);"><i class="fas fa-exclamation-circle"></i> Error in ${match.error_player === 'A' ? escapeHtml(match.player_a) : escapeHtml(match.player_b)}: ${escapeHtml(match.error)}</span><br>`;
+                    matchContent += `<span style="color: var(--danger-color);"><i class="fas fa-exclamation-circle"></i> ${match.error_player === 'A' ? escapeHtml(match.player_a) : escapeHtml(match.player_b)} failed and forfeits: ${escapeHtml(match.error)}</span><br>`;
                     matchContent += `Score (partial): ${match.a_points.toFixed(2)} - ${match.b_points.toFixed(2)}`;
                 } else {
                     matchContent += `Score: ${match.a_points.toFixed(2)} - ${match.b_points.toFixed(2)} | Winner: ${escapeHtml(match.winner)}`;
@@ -1127,22 +1177,9 @@
         }
         
         function recalculateRanking() {
-             // ... logic same as before ...
-             // Re-using displayTournamentResults will handle the UI update
-             const winW = parseInt(document.getElementById('winWeight').value)/100;
-             const coopW = parseInt(document.getElementById('coopWeight').value)/100;
-             const pointW = parseInt(document.getElementById('pointsWeight').value)/100;
-             
-             const newLeaderboard = currentTournamentResult.leaderboard.map(e => {
-                 const totalGames = e.wins + e.draws + e.losses || 1;
-                 const winScore = e.wins / totalGames;
-                 const coopScore = (e.cooperation_percentage || 0) / 100;
-                 const pointScore = (e.points_percentage || 0) / 100;
-                 return { ...e, weighted_score: (winScore*winW + coopScore*coopW + pointScore*pointW) * 100 };
-             });
-             newLeaderboard.sort((a,b) => b.weighted_score - a.weighted_score);
-             currentTournamentResult.leaderboard = newLeaderboard;
-             displayTournamentResults(currentTournamentResult);
+             // displayTournamentResults reads the current slider weights and recomputes every
+             // Score (and the charts) with pdScoreEntry, so re-rendering is all Recalculate needs.
+             if (currentTournamentResult) displayTournamentResults(currentTournamentResult);
         }
 
         // Auth & Gallery logic
@@ -1527,8 +1564,7 @@
                 const result = await readJsonOrRedirect(response);
 
                 if (!response.ok || result?.error) {
-                    const msg = result?.error ? String(result.error) : `Request failed (${response.status})`;
-                    document.getElementById('nplayerResults').innerHTML = `<div class="results" style="color: var(--danger-color);">${msg}</div>`;
+                    showRunError('nplayerResults', result, `Request failed (${response.status})`);
                     return;
                 }
 
@@ -1537,7 +1573,7 @@
                 showSubmitPanel('nplayer', result, roster);
             } catch(e) {
                 console.error(e);
-                document.getElementById('nplayerResults').innerHTML = `<div class="results" style="color: var(--danger-color);">Error running tournament</div>`;
+                showRunError('nplayerResults', null, 'Error running tournament: ' + e.message);
             } finally {
                 spinner.stop();
             }
@@ -1558,25 +1594,24 @@
             // Keep the latest result for slider recalculation, then compute a weighted Score per
             // entry (same formula as 1v1: win-rate / cooperation / points-normalized) and rank by it.
             currentNpResult = result;
-            const maxNpPoints = Math.max(1, ...((result.leaderboard || []).map(e => Number(e.total_points) || 0)));
+            // Same pdScoreEntry as 1v1 and the charts (normalised cooperation %, the server's
+            // points_percentage), so the table and the "Weighted score" chart rank identically.
             (result.leaderboard || []).forEach(e => {
-                const games = (e.wins || 0) + (e.draws || 0) + (e.losses || 0) || 1;
-                const winScore = (e.wins || 0) / games;
-                const coopScore = (e.cooperation_percentage || 0) / 100;
-                const pointScore = (Number(e.total_points) || 0) / maxNpPoints;
-                e.weighted_score = (winScore * npW.win + coopScore * npW.coop + pointScore * npW.points) * 100;
+                e.weighted_score = pdScoreEntry(e, npW.win, npW.coop, npW.points, 5).weightedScore;
             });
             (result.leaderboard || []).sort((a, b) => (b.weighted_score || 0) - (a.weighted_score || 0));
+            const npRankLabels = pdRankLabels((result.leaderboard || []).map(e => e.weighted_score || 0));
 
             let html = `<div class="results" style="border-left: 4px solid var(--primary-color); background: var(--bg-card);">
                 <h3 style="color: var(--primary-color) !important;">N-Player Results</h3>
 
                 <div style="background: rgba(0,0,0,0.2); padding: 10px; margin-bottom: 20px;">
-                    <strong>Info:</strong> ${rounds} rounds,
-                    ${nGroups} groups,
+                    <strong>Info:</strong> ${rounds === '' ? '' : plural(Number(rounds), 'round') + ','}
+                    ${nGroups === '' ? '' : plural(Number(nGroups), 'group') + ','}
                     Group size: ${groupSize || 'all'},
-                    Modes: ${modes.join(', ')}
+                    Modes: ${escHtml(modes.join(', '))}
                 </div>
+                ${runtimeErrorsHtml(result.runtime_errors)}
 
                 <div style="background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px; margin-bottom: 15px;">
                     <h4 style="margin: 0 0 10px 0;">Ranking Weights</h4>
@@ -1609,9 +1644,12 @@
             `;
 
             (result.leaderboard || []).forEach((p, idx) => {
+                const failed = (Array.isArray(p.errors) && p.errors.length)
+                    ? ` <span title="${escHtml(p.errors[0])}" style="color: var(--danger-color); font-size: 0.85em;"><i class="fas fa-exclamation-circle"></i> failed</span>`
+                    : '';
                 html += `<tr>
-                    <td style="padding: 8px; border: 1px solid var(--border-color); text-align: center;">${idx + 1}</td>
-                    <td style="padding: 8px; border: 1px solid var(--border-color);">${p.name}</td>
+                    <td style="padding: 8px; border: 1px solid var(--border-color); text-align: center;">${npRankLabels[idx]}</td>
+                    <td style="padding: 8px; border: 1px solid var(--border-color);">${escHtml(p.name)}${failed}</td>
                     <td style="padding: 8px; border: 1px solid var(--border-color); text-align: center;">${Number(p.weighted_score ?? 0).toFixed(2)}</td>
                     <td style="padding: 8px; border: 1px solid var(--border-color); text-align: center;">${Number(p.total_points ?? 0).toFixed(2)}</td>
                     <td style="padding: 8px; border: 1px solid var(--border-color); text-align: center;">${Number(p.cooperation_percentage ?? 0).toFixed(1)}%</td>
@@ -1631,7 +1669,12 @@
                 matches.forEach((match) => {
                     const players = Array.isArray(match.players) ? match.players : [];
                     const groupIndex = match.group_index ?? '';
-                    html += `<div class="match">Group ${Number(groupIndex) + 1 || groupIndex}: ${players.join(', ')}</div>`;
+                    const errs = Array.isArray(match.errors) && match.errors.length
+                        ? `<br><span style="color: var(--danger-color);"><i class="fas fa-exclamation-circle"></i> `
+                          + match.errors.map(e => `${escHtml(e.name)} failed and forfeits: ${escHtml(e.reason)}`).join('; ')
+                          + `</span>`
+                        : '';
+                    html += `<div class="match">Group ${Number(groupIndex) + 1 || escHtml(groupIndex)}: ${escHtml(players.join(', '))}${errs}</div>`;
                 });
                 html += `</div>`;
             }
@@ -1763,15 +1806,23 @@
                 });
                 const result = await readJsonOrRedirect(response);
                 if (!response.ok || result?.error) {
-                    const msg = result?.error ? String(result.error) : `Request failed (${response.status})`;
-                    document.getElementById('osResults').innerHTML = `<div class="results" style="color: var(--danger-color);">${msg}</div>`;
+                    showRunError('osResults', result, `Request failed (${response.status})`);
                     return;
                 }
                 renderOSSimulation('osResults', result);
+                // Strategies that crashed / looped / returned a bad move are left out of the ranking.
+                const osErrors = ((result.core_simulation_results || {}).errors
+                                  || (result.core_simulation_heterogeneous || {}).errors || []);
+                if (osErrors.length) {
+                    document.getElementById('osResults').insertAdjacentHTML('afterbegin',
+                        strategyIssuesHtml(`${plural(osErrors.length, 'strategy', 'strategies')} failed and ${osErrors.length === 1 ? 'was' : 'were'} left out of the ranking`,
+                                           osErrors, '--danger-color'));
+                }
+                renderFlagsBanner('osResults', result.flags);
                 showSubmitPanel('os', result, roster);
             } catch (e) {
                 console.error(e);
-                document.getElementById('osResults').innerHTML = '<div class="results" style="color: var(--danger-color);">Error running OS simulation</div>';
+                showRunError('osResults', null, 'Error running OS simulation: ' + e.message);
             } finally {
                 spinner.stop();
             }

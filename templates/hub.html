@@ -63,6 +63,7 @@
             <input type="text" id="subName" class="hub-field" placeholder="Strategy name" maxlength="50">
             <textarea id="subCode" class="hub-field" placeholder="def myStrategy(last_moves, my_history, opponents_histories, meta):&#10;    return 'C'"></textarea>
             <button id="submitBtn" class="btn-success"><i class="fas fa-arrow-up-right-from-square"></i> Open website to submit</button>
+            <div id="submitMsg" class="hub-msg"></div>
         </div>
 
         <!-- Gallery -->
@@ -76,6 +77,7 @@
                 <button class="hub-subtab" data-tab="bots"><i class="fas fa-robot"></i> Bots (<span id="cntBots">0</span>)</button>
                 <button class="hub-subtab" data-tab="practice"><i class="fas fa-graduation-cap"></i> Practice (<span id="cntPractice">0</span>)</button>
             </div>
+            <div id="listMsg" class="hub-msg"></div>
             <ul id="hubList" class="hub-list"><li class="meta">Click "Refresh" to load.</li></ul>
         </div>
 
@@ -86,6 +88,7 @@
             against it.</p>
             <textarea id="importCode" class="hub-field" readonly></textarea>
             <button id="copyBtn" class="btn-primary"><i class="fas fa-copy"></i> Copy code</button>
+            <div id="importMsg" class="hub-msg"></div>
         </div>
 
         <!-- Running tournaments + publishing results now lives in the Practice tab:
@@ -96,15 +99,16 @@
             add your own players, run, then use "Submit results to website".</p>
         </div>
 
-        <div id="hubMsg" class="hub-msg"></div>
     </div>
 
     <script nonce="{{ csp_nonce }}">
         const HUB_ENABLED = {{ 'true' if hub_enabled else 'false' }};
         const HUB_BASE_URL = {{ hub_base_url | tojson }};
 
-        function showMsg(text, ok) {
-            const el = document.getElementById('hubMsg');
+        // Each card has its own message line (submitMsg / listMsg / importMsg) so feedback shows
+        // next to the button that caused it, not at the bottom of the page.
+        function showMsg(text, ok, where) {
+            const el = document.getElementById(where || 'submitMsg');
             el.textContent = text;
             el.className = 'hub-msg ' + (ok ? 'ok' : 'err');
             el.style.display = 'block';
@@ -172,8 +176,8 @@
                 if (!resp.ok) { throw new Error(data.error || 'Refresh failed'); }
                 const total = hubData.players.length + hubData.bots.length + hubData.practice.length;
                 showMsg('Updated from website (' + total + ' cached: ' + hubData.players.length + ' player, '
-                        + hubData.bots.length + ' bot, ' + hubData.practice.length + ' practice).', true);
-            } catch (e) { showMsg(e.message, false); }
+                        + hubData.bots.length + ' bot, ' + hubData.practice.length + ' practice).', true, 'listMsg');
+            } catch (e) { showMsg(e.message, false, 'listMsg'); }
             finally { btn.disabled = false; }
         }
 
@@ -188,11 +192,12 @@
                 if (data.flagged) {
                     showMsg('Imported "' + data.name + '" — ⚠ an admin FLAGGED this strategy'
                         + (data.flag_reason ? ' (' + data.flag_reason + ')' : '')
-                        + '. It passed the local sandbox but hung or errored when screened in isolation.', false);
+                        + '. It passed the local sandbox but hung or errored when screened in isolation.', false, 'importMsg');
                 } else {
-                    showMsg('Imported "' + data.name + '" — passed the local sandbox.', true);
+                    showMsg('Imported "' + data.name + '" — passed the local sandbox.', true, 'importMsg');
                 }
-            } catch (e) { showMsg(e.message, false); }
+                document.getElementById('importPanel').scrollIntoView({ behavior: 'smooth', block: 'center' });
+            } catch (e) { showMsg(e.message, false, 'listMsg'); }
         }
 
         document.getElementById('submitBtn').addEventListener('click', async () => {
@@ -229,7 +234,7 @@
         document.getElementById('copyBtn').addEventListener('click', () => {
             const ta = document.getElementById('importCode');
             ta.select();
-            navigator.clipboard.writeText(ta.value).then(() => showMsg('Copied to clipboard.', true));
+            navigator.clipboard.writeText(ta.value).then(() => showMsg('Copied to clipboard.', true, 'importMsg'));
         });
 
         loadCache();   // show cached strategies (offline-friendly); Refresh updates from the website
