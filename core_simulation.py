@@ -4,7 +4,19 @@ import itertools
 import time
 from cache_model import build_core_hierarchies
 from schedulers import build_scheduler
-from n_player_simulation import call_strategy
+from n_player_simulation import (call_strategy, run_with_limit, validate_move,
+                                 describe_strategy_error, InstructionLimitExceeded)
+
+
+class StrategyRuntimeError(Exception):
+    """A core's strategy failed mid-simulation (crash, instruction cap, or a bad move).
+
+    Carries the core index so the caller can tell which strategy of a mixture to disqualify.
+    """
+    def __init__(self, core_idx, reason):
+        super().__init__(reason)
+        self.core_idx = core_idx
+        self.reason = reason
 
 # Canonical whitelist of modules a submitted strategy may import. Single source of truth, shared
 # by app.py (which imports it) so the sandbox + the static `is_safe_code` checker stay in sync and
@@ -167,7 +179,7 @@ def extract_strategy_func(code, seed=None):
                 if code_obj is not None and code_obj.co_argcount == n:
                     return f
         return funcs[0]
-    except:
+    except Exception:
         return None
 
 
@@ -365,18 +377,21 @@ class OSSimulator:
                 'rng': self.rng,
                 'tournament_info': {'format': 'os_simulation', 'n_players': self.num_cores},
             }
+            # Same per-call bounds as 1v1 / N-Player: the instruction cap stops a runaway loop,
+            # and the move must be exactly 'C' or 'D'. A failure is raised, not papered over.
             try:
-                move = call_strategy(
+                move = validate_move(run_with_limit(
+                    call_strategy,
                     core.strategy_func,
                     [contention_move] if my_history else [],
                     my_history,
                     [contention_history],
                     meta,
-                )
-            except Exception:
-                move = 'C'
-        if move not in ('C', 'D'):
-            move = 'C'
+                ))
+            except InstructionLimitExceeded as e:
+                raise StrategyRuntimeError(core_idx, describe_strategy_error(e)) from None
+            except Exception as e:
+                raise StrategyRuntimeError(core_idx, describe_strategy_error(e)) from None
         core.last_move = move
         self.core_moves[core_idx].append(move)
         self.core_contention[core_idx].append(contention_move)
@@ -543,7 +558,10 @@ def build_core_trace(named_funcs, num_cores=2, seed=None, scheduler='round_robin
     sim = OSSimulator(workload, funcs, scheduler=scheduler, seed=seed,
                       num_cores=num_cores, record_trace=True)
     sim.generate_workload(process_count)
-    sim.run()
+    try:
+        sim.run()
+    except StrategyRuntimeError:
+        return None   # the failing strategy is already reported by the main run
     return {'cores': names, 'scheduler': scheduler, 'workload': workload,
             'ticks': sim.trace[:max_ticks]}
 
@@ -570,22 +588,28 @@ def run_full_simulation(strategies_data, num_cores=2, seed=None, scheduler='roun
     Each per-workload metrics dict carries its own coop_rate; `avg` carries the averaged coop_rate.
     """
     strategies = {}
+    errors = []   # [{name, reason}] for strategies left out of the ranking (disqualified)
     for strat in strategies_data:
         name = strat['name']
         func = extract_strategy_func(strat['code'], seed=seed)
         if not func:
+            errors.append({'name': name, 'reason': 'could not find a strategy function in the code'})
             continue
         per_wl = {}
         coop_rates = []
-        for wl in WORKLOAD_PROFILES:
-            sim = OSSimulator(wl, [func] * num_cores, scheduler=scheduler,
-                              seed=seed, num_cores=num_cores)
-            sim.generate_workload(FULL_PROCESS_COUNT)
-            metrics = sim.run()['global_metrics']
-            cr = round(sim.realized_coop_rate() * 100, 1)
-            metrics['coop_rate'] = cr
-            coop_rates.append(cr)
-            per_wl[wl] = metrics
+        try:
+            for wl in WORKLOAD_PROFILES:
+                sim = OSSimulator(wl, [func] * num_cores, scheduler=scheduler,
+                                  seed=seed, num_cores=num_cores)
+                sim.generate_workload(FULL_PROCESS_COUNT)
+                metrics = sim.run()['global_metrics']
+                cr = round(sim.realized_coop_rate() * 100, 1)
+                metrics['coop_rate'] = cr
+                coop_rates.append(cr)
+                per_wl[wl] = metrics
+        except StrategyRuntimeError as e:
+            errors.append({'name': name, 'reason': e.reason})
+            continue
         avg = _avg_metrics(per_wl.values())
         avg['coop_rate'] = round(sum(coop_rates) / len(coop_rates), 1) if coop_rates else 0.0
         strategies[name] = {'workloads': per_wl, 'avg': avg, 'coop_rate': avg['coop_rate']}
@@ -596,6 +620,7 @@ def run_full_simulation(strategies_data, num_cores=2, seed=None, scheduler='roun
         'num_cores': num_cores,
         'baseline': run_baseline_simulation(num_cores=num_cores, seed=seed, scheduler=scheduler),
         'strategies': strategies,
+        'errors': errors,
     }
 
 
@@ -630,11 +655,14 @@ def run_heterogeneous_simulation(strategies_data, num_cores=2, seed=None,
     their strategy. Shuffling with the run's own seed keeps results reproducible.
     """
     funcs, names = [], []
+    errors = {}   # strategy name -> reason; these are disqualified from every mixture
     for strat in strategies_data:
         func = extract_strategy_func(strat['code'], seed=seed)
         if func:
             funcs.append(func)
             names.append(strat['name'])
+        else:
+            errors[strat['name']] = 'could not find a strategy function in the code'
     k = len(funcs)
     if k < num_cores:
         raise ValueError(
@@ -662,6 +690,9 @@ def run_heterogeneous_simulation(strategies_data, num_cores=2, seed=None,
     results = []
     elapsed = 0.0
     for combo in combos:
+        # A strategy that already failed is disqualified, so skip every mixture containing it.
+        if any(names[i] in errors for i in combo):
+            continue
         # Stop before starting a combination the running average says would overrun the budget.
         # `results` is checked so at least one always runs: a budget smaller than a single
         # combination should still produce a leaderboard, not an empty one.
@@ -679,16 +710,21 @@ def run_heterogeneous_simulation(strategies_data, num_cores=2, seed=None,
         agg = []
         per_wl = {}
         coop_rates = []
-        for wl in WORKLOAD_PROFILES:
-            sim = OSSimulator(wl, core_strategies, scheduler=scheduler,
-                              seed=seed, num_cores=num_cores)
-            sim.generate_workload(FULL_PROCESS_COUNT)
-            metrics = sim.run()['global_metrics']
-            cr = round(sim.realized_coop_rate() * 100, 1)
-            metrics['coop_rate'] = cr
-            coop_rates.append(cr)
-            agg.append(metrics)
-            per_wl[wl] = metrics
+        try:
+            for wl in WORKLOAD_PROFILES:
+                sim = OSSimulator(wl, core_strategies, scheduler=scheduler,
+                                  seed=seed, num_cores=num_cores)
+                sim.generate_workload(FULL_PROCESS_COUNT)
+                metrics = sim.run()['global_metrics']
+                cr = round(sim.realized_coop_rate() * 100, 1)
+                metrics['coop_rate'] = cr
+                coop_rates.append(cr)
+                agg.append(metrics)
+                per_wl[wl] = metrics
+        except StrategyRuntimeError as e:
+            errors.setdefault(names[combo[e.core_idx]], e.reason)
+            elapsed += time.perf_counter() - started
+            continue
         m = _avg_metrics(agg)
         coop_avg = round(sum(coop_rates) / len(coop_rates), 1) if coop_rates else 0.0
         # Per-profile breakdown so the frontend profile dropdown works for heterogeneous too.
@@ -712,6 +748,11 @@ def run_heterogeneous_simulation(strategies_data, num_cores=2, seed=None,
         })
         elapsed += time.perf_counter() - started
 
+    # A strategy can fail in a later mixture after already appearing in earlier ones; drop those
+    # earlier mixtures too, so a disqualified strategy never shows up in the ranking.
+    if errors:
+        results = [r for r in results
+                   if not any(d['strategy_name'] in errors for d in r['assignment_details'])]
     results.sort(key=lambda r: r['throughput'], reverse=True)
     return {
         'assignment_mode': 'heterogeneous',
@@ -728,4 +769,5 @@ def run_heterogeneous_simulation(strategies_data, num_cores=2, seed=None,
         'elapsed_seconds': round(elapsed, 3),
         'baseline': run_baseline_simulation(num_cores=num_cores, seed=seed, scheduler=scheduler),
         'results': results,
+        'errors': [{'name': n, 'reason': r} for n, r in errors.items()],
     }

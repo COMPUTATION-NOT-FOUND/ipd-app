@@ -54,6 +54,46 @@ def run_with_limit(func, *args, limit=None):
         sys.settrace(None)
 
 
+class InvalidMove(ValueError):
+    """A strategy returned something other than exactly 'C' or 'D'."""
+
+
+# Values whose repr() is plain builtin code. Anything else (e.g. an instance of a class the
+# strategy defined) is described by its kind only, so a strategy-defined __repr__ / __eq__ never
+# runs outside the instruction cap.
+_SAFE_REPR_TYPES = (int, float, bool, type(None), str, bytes)
+
+
+def validate_move(move):
+    """Return ``move`` if it is exactly 'C' or 'D', else raise InvalidMove naming the bad value.
+
+    The single move check shared by 1v1, N-Player and the OS simulation, so a strategy that
+    returns 1, None, 'c' or True is rejected the same way everywhere instead of being silently
+    counted as cooperation. ``type(move) is str`` (not isinstance) keeps a str subclass with a
+    custom __eq__ from deciding the comparison.
+    """
+    if type(move) is str and move in ('C', 'D'):
+        return move
+    if type(move) in _SAFE_REPR_TYPES:
+        shown = repr(move)
+        if len(shown) > 40:
+            shown = shown[:37] + '...'
+    else:
+        shown = 'a non-string value'
+    raise InvalidMove(f"returned {shown}; a strategy must return exactly 'C' or 'D'")
+
+
+def describe_strategy_error(exc):
+    """One-line, user-facing reason for a strategy failure (shared by every engine)."""
+    if isinstance(exc, InstructionLimitExceeded) or type(exc).__name__ == 'InstructionLimitExceeded':
+        return "exceeded the instruction limit (infinite loop?)"
+    if isinstance(exc, RecursionError):
+        return "exceeded the recursion limit (infinite recursion?)"
+    if isinstance(exc, InvalidMove):
+        return str(exc)
+    return f"{type(exc).__name__}: {exc}"
+
+
 def call_strategy(
     strategy_func: Callable,
     last_moves: list[str],
@@ -190,6 +230,10 @@ def game_n(
             round_limit = rng.randint(100, 300)
 
     rounds_played = 0
+    # First strategy failure (crash, instruction cap, or a move that isn't 'C'/'D'). The match
+    # stops there, like 1v1: the failing player forfeits and the round in progress is discarded.
+    error_player = None
+    error_reason = None
 
     # Main game loop
     for round_num in range(round_limit):
@@ -230,7 +274,7 @@ def game_n(
             
             # Call strategy with instruction limit
             try:
-                move = run_with_limit(
+                move = validate_move(run_with_limit(
                     call_strategy,
                     strategies[player_idx],
                     last_moves,
@@ -238,29 +282,26 @@ def game_n(
                     opponents_histories,
                     meta,
                     limit=MAX_STRATEGY_INSTRUCTIONS
-                )
-            except InstructionLimitExceeded:
-                # If strategy exceeds limit, default to cooperate
-                move = 'C'
-            except RecursionError:
-                # If infinite recursion, default to cooperate
-                move = 'C'
-            except Exception:
-                # If any other error, default to cooperate
-                move = 'C'
-            
-            # Validate move
-            if move not in ['C', 'D']:
-                move = 'C'
-            
+                ))
+            except InstructionLimitExceeded as e:
+                error_player, error_reason = player_idx, describe_strategy_error(e)
+                break
+            except Exception as e:
+                error_player, error_reason = player_idx, describe_strategy_error(e)
+                break
+
             moves.append(move)
-            
-            # Update move counts
+
+        if error_player is not None:
+            break
+
+        # Update move counts (only for completed rounds, so a discarded round leaves no trace)
+        for player_idx, move in enumerate(moves):
             if move == 'C':
                 coop_counts[player_idx] += 1
             else:
                 defect_counts[player_idx] += 1
-        
+
         # Compute payoffs for this round using the payoff model
         round_payoffs = payoff_model.compute_round_payoffs(
             moves,
@@ -292,9 +333,12 @@ def game_n(
         'defect_counts_by_player': {i: defect_counts[i] for i in range(n_players)},
         'tournament_info': tournament_info,
         'rounds_played': rounds_played,
-        'match_complete': True
+        'match_complete': error_player is None
     }
-    
+    if error_player is not None:
+        result['error_player'] = error_player
+        result['error'] = error_reason
+
     return result
 
 
@@ -379,6 +423,10 @@ def group_tournament(
         groups = []
         for i in range(0, n_strategies, group_size):
             groups.append(indices[i:i + group_size])
+        # A leftover group of one has nobody to play, and would otherwise be credited a win for
+        # "beating" an empty field. Fold that player into the previous group instead.
+        if len(groups) > 1 and len(groups[-1]) == 1:
+            groups[-2].extend(groups.pop())
     
     # Initialize leaderboard tracking for all players
     leaderboard_data = {
@@ -405,6 +453,7 @@ def group_tournament(
             'mode_cooperates': {m: 0 for m in active_modes},
             'mode_defects': {m: 0 for m in active_modes},
             'mode_total_moves': {m: 0 for m in active_modes},
+            'errors': [],
         }
         for i in range(n_strategies)
     }
@@ -441,6 +490,9 @@ def group_tournament(
         # Per-mode cooperation ratio (one entry per mode this match actually played)
         coop_ratio_sum = [0.0] * n_local
         coop_ratio_count = [0] * n_local
+        # Local index -> reason, for players whose strategy failed in any mode of this match.
+        # A failing player forfeits: it is recorded as a loss and can't win or draw.
+        errored = {}
 
         for mode_idx, mode_name in enumerate(active_modes):
             # Generate deterministic sub-seed for this match
@@ -466,6 +518,8 @@ def group_tournament(
 
             per_mode_results[mode_name] = match_result
             rounds_played = int(match_result.get('rounds_played', 0) or 0)
+            if match_result.get('error_player') is not None:
+                errored.setdefault(match_result['error_player'], match_result.get('error', ''))
 
             for local_idx in range(n_local):
                 pts = float(match_result['total_points_by_player'][local_idx])
@@ -494,10 +548,12 @@ def group_tournament(
         avg_points = [p / denom for p in points_sum]
         avg_points_per_round = [p / denom for p in points_per_round_sum]
 
-        # Determine winner(s) in this group based on averaged points
-        max_points = max(avg_points) if avg_points else 0.0
+        # Determine winner(s) in this group based on averaged points. Players whose strategy
+        # failed are out of contention (they forfeit), so the winner comes from the rest.
+        contenders = [i for i in range(n_local) if i not in errored]
+        max_points = max((avg_points[i] for i in contenders), default=0.0)
         eps = 1e-12
-        top_players = [i for i, pts in enumerate(avg_points) if abs(pts - max_points) <= eps]
+        top_players = [i for i in contenders if abs(avg_points[i] - max_points) <= eps]
 
         # Update leaderboard data for each player in this group
         for local_idx, global_idx in enumerate(group_indices):
@@ -509,6 +565,9 @@ def group_tournament(
             leaderboard_data[global_idx]['avg_points_per_round_sum'] += avg_points_per_round[local_idx]
             leaderboard_data[global_idx]['mode_coop_ratio_sum'] += coop_ratio_sum[local_idx]
             leaderboard_data[global_idx]['mode_coop_ratio_count'] += coop_ratio_count[local_idx]
+
+            if local_idx in errored:
+                leaderboard_data[global_idx]['errors'].append(errored[local_idx])
 
             if local_idx in top_players:
                 if len(top_players) == 1:
@@ -537,12 +596,18 @@ def group_tournament(
                 'match_complete': True,
             }
 
-        all_matches.append({
+        match_record = {
             'group_index': group_idx,
             'players': [strategies[i]['name'] for i in group_indices],
             'player_indices': group_indices,
             'results': match_payload,
-        })
+        }
+        if errored:
+            match_record['errors'] = [
+                {'name': strategies[group_indices[i]]['name'], 'reason': reason}
+                for i, reason in sorted(errored.items())
+            ]
+        all_matches.append(match_record)
     
     # Calculate percentages and prepare leaderboard
     leaderboard = []
@@ -634,15 +699,22 @@ def group_tournament(
             'total_moves': data['total_moves'],
             'mode_points': mode_points,
             'mode_stats': mode_stats,
+            'errors': data['errors'],
         })
-    
+
     # Sort leaderboard by total points descending
     leaderboard.sort(key=lambda x: x['total_points'], reverse=True)
     
     # Build result
+    # One entry per failing strategy (first reason), so the page can name it and say why.
+    runtime_errors = [
+        {'name': e['name'], 'reason': e['errors'][0]} for e in leaderboard if e['errors']
+    ]
+
     result = {
         'leaderboard': leaderboard,
         'matches': all_matches,
+        'runtime_errors': runtime_errors,
         'tournament_info': {
             'format': 'n_player',
             'mode': legacy_mode,

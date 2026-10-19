@@ -38,7 +38,7 @@ from audit_utils import log_audit_event, get_request_context
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from payoff_models import PairwiseMatrixPayoff, PublicGoodsPayoff, KCooperatorTensorPayoff
-from n_player_simulation import group_tournament, call_strategy
+from n_player_simulation import group_tournament, call_strategy, validate_move, describe_strategy_error
 from tournament_package import sha256_text, canonical_json
 
 # --- SECURITY & LIMITS ---
@@ -790,7 +790,7 @@ def extract_strategy_function(code, globals_dict, prefer_n_args=3):
             for func_name in function_names:
                 if func_name in globals_dict and callable(globals_dict[func_name]):
                     return globals_dict[func_name]
-    except:
+    except (SyntaxError, ValueError, TypeError):
         pass
     
     # Fallback: find first callable that's not a known builtin
@@ -1005,85 +1005,31 @@ def game(player_a_code, player_a_name, player_b_code, player_b_name, rounds=200,
             if current_round >= round_limit:
                 break
 
-        # Get moves
-        A_guess = None
-        B_guess = None
-        error_occurred = False
-        error_info = {}
-        
-        # Execute Player A strategy
-        try:
-            last_moves_a = [enemy_history[-1]] if enemy_history else []
-            meta_a = {'round': current_round, 'n_players': 2, 'player_index': 0, 'tournament_info': tournament_info, 'rng': rng}
-            A_guess = run_with_limit(call_strategy, player_a_func, last_moves_a, user_history.copy(), [enemy_history.copy()], meta_a, limit=MAX_STRATEGY_INSTRUCTIONS)
-        except InstructionLimitExceeded as e:
-            error_msg = "Strategy exceeded instruction limit (infinite loop detected)"
-            app.logger.error(f"Player A: {error_msg}")
-            error_occurred = True
-            error_info = {
-                'error': error_msg,
-                'error_type': 'InstructionLimitExceeded',
-                'error_player': 'A',
-                'terminated_early': True
-            }
-        except RecursionError as e:
-            error_msg = "Strategy exceeded recursion limit (infinite recursion detected)"
-            app.logger.error(f"Player A: {error_msg}")
-            error_occurred = True
-            error_info = {
-                'error': error_msg,
-                'error_type': 'RecursionError',
-                'error_player': 'A',
-                'terminated_early': True
-            }
-        except Exception as e:
-            error_msg = f"{type(e).__name__}: {str(e)}"
-            app.logger.error(f"Runtime error in Player A strategy: {error_msg}")
-            error_occurred = True
-            error_info = {
-                'error': error_msg,
-                'error_type': type(e).__name__,
-                'error_player': 'A',
-                'terminated_early': True
-            }
-        
-        # Execute Player B strategy if no error yet
-        if not error_occurred:
+        # Get moves. Each call is bounded by the instruction cap and must return exactly 'C' or
+        # 'D' (validate_move); any failure ends the match with that player named as the culprit.
+        def _play(func, player, last_moves, own_history, opp_history, player_index):
+            meta = {'round': current_round, 'n_players': 2, 'player_index': player_index,
+                    'tournament_info': tournament_info, 'rng': rng}
             try:
-                last_moves_b = [user_history[-1]] if user_history else []
-                meta_b = {'round': current_round, 'n_players': 2, 'player_index': 1, 'tournament_info': tournament_info, 'rng': rng}
-                B_guess = run_with_limit(call_strategy, player_b_func, last_moves_b, enemy_history.copy(), [user_history.copy()], meta_b, limit=MAX_STRATEGY_INSTRUCTIONS)
+                move = validate_move(run_with_limit(call_strategy, func, last_moves, own_history.copy(),
+                                                    [opp_history.copy()], meta, limit=MAX_STRATEGY_INSTRUCTIONS))
+                return move, None
             except InstructionLimitExceeded as e:
-                error_msg = "Strategy exceeded instruction limit (infinite loop detected)"
-                app.logger.error(f"Player B: {error_msg}")
-                error_occurred = True
-                error_info = {
-                    'error': error_msg,
-                    'error_type': 'InstructionLimitExceeded',
-                    'error_player': 'B',
-                    'terminated_early': True
-                }
-            except RecursionError as e:
-                error_msg = "Strategy exceeded recursion limit (infinite recursion detected)"
-                app.logger.error(f"Player B: {error_msg}")
-                error_occurred = True
-                error_info = {
-                    'error': error_msg,
-                    'error_type': 'RecursionError',
-                    'error_player': 'B',
-                    'terminated_early': True
-                }
+                exc = e
             except Exception as e:
-                error_msg = f"{type(e).__name__}: {str(e)}"
-                app.logger.error(f"Runtime error in Player B strategy: {error_msg}")
-                error_occurred = True
-                error_info = {
-                    'error': error_msg,
-                    'error_type': type(e).__name__,
-                    'error_player': 'B',
-                    'terminated_early': True
-                }
-        
+                exc = e
+            reason = describe_strategy_error(exc)
+            app.logger.error(f"Player {player} strategy failed: {reason}")
+            return None, {'error': reason, 'error_type': type(exc).__name__,
+                          'error_player': player, 'terminated_early': True}
+
+        A_guess, error_info = _play(player_a_func, 'A', [enemy_history[-1]] if enemy_history else [],
+                                    user_history, enemy_history, 0)
+        if error_info is None:
+            B_guess, error_info = _play(player_b_func, 'B', [user_history[-1]] if user_history else [],
+                                        enemy_history, user_history, 1)
+        error_occurred = error_info is not None
+
         # If error occurred, return with partial results
         if error_occurred:
             # Calculate final scores up to this point
@@ -1112,11 +1058,7 @@ def game(player_a_code, player_a_name, player_b_code, player_b_name, rounds=200,
             }
             result.update(error_info)
             return result
-            
-        # Validate moves
-        if A_guess not in ['C', 'D']: A_guess = 'C'
-        if B_guess not in ['C', 'D']: B_guess = 'C'
-        
+
         # Update move counters
         if A_guess == 'C': a_coops += 1
         else: a_defects += 1
@@ -1416,9 +1358,10 @@ def hub_screen():
     except Exception as e:
         return jsonify({'error': f'Strategy crashed when run locally: {e}'}), 400
     if isinstance(result, dict) and result.get('winner') == 'Error':
-        return jsonify({'error': 'Strategy errored in a test match — make sure your code defines a '
-                                 'strategy function with the right signature that returns "C"/"D", '
-                                 'then re-run.'}), 400
+        reason = result.get('error') or 'unknown error'
+        return jsonify({'error': f'Strategy failed in a test match: {reason}. Make sure your code '
+                                 'defines a strategy function with the right signature that returns '
+                                 'exactly "C" or "D", then re-run.'}), 400
     return jsonify({'ok': True})
 
 
@@ -1593,6 +1536,7 @@ def round_robin_tournament(strategies, rounds=200, payoff_matrix=None, modes=Non
     
     # Generate all possible pairs
     strategy_pairs = list(combinations(strategies, 2))
+    runtime_errors = {}   # strategy name -> first failure reason during a match
     
     app.logger.info(f"=== Round Robin Tournament: {len(strategies)} strategies, {len(strategy_pairs)} matches ===")
     app.logger.info(f"Modes: {modes}")
@@ -1667,29 +1611,54 @@ def round_robin_tournament(strategies, rounds=200, payoff_matrix=None, modes=Non
         # Calculate average score for the pair across all modes
         avg_a_points = pair_a_points / len(modes)
         avg_b_points = pair_b_points / len(modes)
-        
+
         # Update leaderboard points
         leaderboard[strategy_a['name']]['total_points'] += avg_a_points
         leaderboard[strategy_b['name']]['total_points'] += avg_b_points
-        
-        # Determine winner for the pair based on average score
-        if avg_a_points > avg_b_points:
+
+        # A strategy that failed (crash, instruction cap, or a move other than 'C'/'D') in any
+        # mode forfeits the pair: the opponent gets the win. Without this a round-1 crash scored
+        # 0-0 and was counted as a draw, so the broken strategy lost nothing.
+        failed = {r.get('error_player') for r in pair_mode_results if r.get('error')}
+        if failed == {'A'}:
+            pair_winner = 'B'
+        elif failed == {'B'}:
+            pair_winner = 'A'
+        elif failed:
+            pair_winner = None          # both failed: nobody earns the win
+        elif avg_a_points > avg_b_points:
+            pair_winner = 'A'
+        elif avg_a_points < avg_b_points:
+            pair_winner = 'B'
+        else:
+            pair_winner = 'Draw'
+
+        if pair_winner == 'A':
             leaderboard[strategy_a['name']]['wins'] += 1
             leaderboard[strategy_b['name']]['losses'] += 1
-        elif avg_a_points < avg_b_points:
+        elif pair_winner == 'B':
             leaderboard[strategy_b['name']]['wins'] += 1
             leaderboard[strategy_a['name']]['losses'] += 1
-        else:
+        elif pair_winner == 'Draw':
             leaderboard[strategy_a['name']]['draws'] += 1
             leaderboard[strategy_b['name']]['draws'] += 1
-        
+        else:
+            leaderboard[strategy_a['name']]['losses'] += 1
+            leaderboard[strategy_b['name']]['losses'] += 1
+
+        # Remember the first failure reason per strategy so the page can name it and say why.
+        for r in pair_mode_results:
+            if r.get('error') and r.get('error_player') in ('A', 'B'):
+                culprit = strategy_a['name'] if r['error_player'] == 'A' else strategy_b['name']
+                runtime_errors.setdefault(culprit, r['error'])
+
         # Store result (using the last mode's details or a summary)
         match_result = {
             'player_a': strategy_a['name'],
             'player_b': strategy_b['name'],
             'a_points': avg_a_points,
             'b_points': avg_b_points,
-            'winner': "A" if avg_a_points > avg_b_points else "B" if avg_b_points > avg_a_points else "Draw",
+            'winner': pair_winner or 'None (both failed)',
             'mode_results': pair_mode_results
         }
         
@@ -1795,7 +1764,8 @@ def round_robin_tournament(strategies, rounds=200, payoff_matrix=None, modes=Non
             'cooperation_percentage': cooperation_percentage,         # Actual historical %
             'norm_cooperation_percentage': norm_coop_percentage,      # Normalized % for scoring
             'points_percentage': points_percentage,
-            'weighted_score': stats['total_points']  # Default to points for initial sort
+            'weighted_score': stats['total_points'],  # Default to points for initial sort
+            'error': runtime_errors.get(name),
         }
         enhanced_leaderboard.append(enhanced_entry)
     
@@ -1809,7 +1779,8 @@ def round_robin_tournament(strategies, rounds=200, payoff_matrix=None, modes=Non
     return {
         'leaderboard': sorted_leaderboard,
         'matches': results,
-        'total_matches': len(strategy_pairs)
+        'total_matches': len(strategy_pairs),
+        'runtime_errors': [{'name': n, 'reason': r} for n, r in runtime_errors.items()],
     }
 
 
