@@ -1,25 +1,68 @@
 {# Shared "How it works" explainer (modes, scoring, OS simulation). Included near the top of the
-   practice and results pages. Collapsed by default — click the heading to expand. Kept as the
-   single in-app reference; the README is the canonical source of truth. #}
+   practice and results pages. Collapsed by default — click the heading to expand. Inside, each
+   topic is its own collapsible row so readers can open just what they need. Kept as the single
+   in-app reference; the README is the canonical source of truth. #}
 <style>
-    .gameinfo-summary { cursor: pointer; list-style: none; outline: none; }
-    .gameinfo-summary::-webkit-details-marker { display: none; }
+    /* ---- outer + inner disclosure headings ---- */
+    .gameinfo-summary, .gi-sub > summary { cursor: pointer; list-style: none; outline: none; }
+    .gameinfo-summary::-webkit-details-marker,
+    .gi-sub > summary::-webkit-details-marker { display: none; }
     .gameinfo-summary h3 { display: inline; }
-    .gameinfo-summary::before {
+    .gameinfo-summary::before, .gi-sub > summary::before {
         content: '\25B8'; margin-right: 10px; color: var(--info-color);
         display: inline-block; transition: transform .15s ease;
     }
-    details[open] .gameinfo-summary::before { transform: rotate(90deg); }
+    details[open] > .gameinfo-summary::before,
+    .gi-sub[open] > summary::before { transform: rotate(90deg); }
+
     .gameinfo-body { margin-top: 14px; }
-    .gameinfo-body h4 { margin: 18px 0 6px 0; color: var(--info-color); }
-    .gameinfo-body table.gi { border-collapse: collapse; width: 100%; font-size: 0.86em; margin: 6px 0 10px 0; }
+
+    /* short "quick version" callout */
+    .gi-tldr {
+        border-left: 3px solid var(--info-color);
+        background: color-mix(in srgb, var(--color-ink) 4%, transparent);
+        padding: 10px 14px; border-radius: var(--radius-sm); margin: 4px 0 18px 0;
+        font-size: 0.92em; line-height: 1.5;
+    }
+
+    /* each topic is a collapsible row */
+    .gi-sub {
+        border: 1px solid var(--border-color); border-radius: var(--radius-sm);
+        margin: 8px 0; padding: 0 14px;
+    }
+    .gi-sub > summary {
+        padding: 11px 0; font-weight: 600; color: var(--info-color);
+    }
+    .gi-sub[open] > summary { border-bottom: 1px solid var(--border-color); margin-bottom: 10px; }
+    .gi-sub > summary i { margin-right: 7px; }
+    .gi-sub .gi-content { padding-bottom: 14px; }
+
+    /* keep everything inside the box — never widen the page */
+    .gameinfo-body, .gameinfo-body * { overflow-wrap: break-word; }
+    .gameinfo-body ul, .gameinfo-body ol { line-height: 1.55; padding-left: 20px; }
+    .gameinfo-body li { margin: 4px 0; }
+    .gameinfo-body code {
+        background: color-mix(in srgb, var(--color-ink) 8%, transparent);
+        padding: 1px 5px; border-radius: var(--radius-sm); overflow-wrap: break-word;
+    }
+
+    /* wide tables scroll inside their own box instead of stretching the page */
+    .gi-scroll { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .gameinfo-body table.gi { border-collapse: collapse; width: 100%; min-width: 440px; font-size: 0.86em; margin: 6px 0 2px 0; }
     .gameinfo-body table.gi th, .gameinfo-body table.gi td {
         border: 1px solid var(--border-color); padding: 6px 9px; text-align: left; vertical-align: top;
     }
     .gameinfo-body table.gi th { background: color-mix(in srgb, var(--color-ink) 4%, transparent); }
-    .gameinfo-body code { background: color-mix(in srgb, var(--color-ink) 8%, transparent); padding: 1px 5px; border-radius: var(--radius-sm); }
-    .gameinfo-body .formula { font-family: monospace; font-size: 0.9em; background: color-mix(in srgb, var(--color-ink) 6%, transparent);
-        padding: 8px 10px; border-radius: var(--radius-sm); margin: 4px 0; overflow-x: auto; }
+
+    /* formulas wrap by default; the raw metric block scrolls inside its box */
+    .gameinfo-body .formula {
+        font-family: monospace; font-size: 0.9em;
+        background: color-mix(in srgb, var(--color-ink) 6%, transparent);
+        padding: 8px 10px; border-radius: var(--radius-sm); margin: 6px 0;
+        overflow-wrap: break-word;
+    }
+    .gameinfo-body .formula.scroll { white-space: pre; overflow-x: auto; }
+    .gameinfo-body .muted { font-size: 0.88em; color: var(--text-secondary); }
 </style>
 
 <div class="strategy game-info" style="border-left: 4px solid var(--info-color);">
@@ -31,166 +74,178 @@
     </summary>
     <div class="gameinfo-body">
 
-    <p>
-        This is the Prisoner's Dilemma framed as a model of <strong>cooperative CPU scheduling</strong>.
-        A move of <strong>Cooperate</strong> models a program that <strong>yields the CPU</strong>
-        (POSIX <code>sched_yield()</code>) so others can run; <strong>Defect</strong> models a program
-        that <strong>keeps running</strong> to maximise its own throughput. Strategies are written and
-        scored as ordinary Prisoner's Dilemma players — the cores view is just what the payoffs represent.
-    </p>
+    <div class="gi-tldr">
+        <strong>Quick version:</strong> you write Prisoner's Dilemma strategies that return
+        <code>'C'</code> (<strong>Cooperate</strong>) or <code>'D'</code> (<strong>Defect</strong>) each round.
+        In the OS Simulation the same moves mean <em>yield the CPU</em> and <em>keep running</em>.
+        Strategies compete in three modes — <strong>1v1</strong>, <strong>N-Player</strong>, and a standalone
+        <strong>OS Simulation</strong>. Open a section below for the details.
+    </div>
 
-    <h4><i class="fas fa-layer-group"></i> The three modes</h4>
-    <ul style="line-height: 1.5;">
-        <li><strong>1v1</strong> — a <em>round-robin</em>: every strategy plays every other strategy in a
-            separate two-player match; results aggregate into the weighted score below.</li>
-        <li><strong>N-Player</strong> — a <em>simultaneous</em> group match where all players move at once
-            each round (hence the dedicated group payoff models below). Also scored by the weighted score.</li>
-        <li><strong>OS Simulation</strong> — a <em>standalone</em> benchmark scored on scheduling metrics
-            (throughput, wait, turnaround, response, cache misses), <em>not</em> the weighted score.</li>
-    </ul>
+    <!-- ===== The three modes ===== -->
+    <details class="gi-sub">
+        <summary><i class="fas fa-layer-group"></i> The three modes</summary>
+        <div class="gi-content">
+            <ul>
+                <li><strong>1v1</strong> — round-robin: every strategy plays every other in a separate
+                    two-player match. Scored by the weighted score below.</li>
+                <li><strong>N-Player</strong> — one group match where everyone moves at the same time each
+                    round. Also scored by the weighted score.</li>
+                <li><strong>OS Simulation</strong> — a standalone benchmark scored on scheduling metrics
+                    (throughput, wait, turnaround, response, cache misses), <em>not</em> the weighted score.</li>
+            </ul>
+        </div>
+    </details>
 
-    <!-- ===== Scoring (1v1 & N-Player) ===== -->
-    <h4><i class="fas fa-scale-balanced"></i> How the score is calculated (1v1 &amp; N-Player)</h4>
-    <p>Each strategy gets three component scores, each a fraction in [0, 1]:</p>
-    <ul>
-        <li><strong>Win rate</strong> = <code>wins / (wins + draws + losses)</code>. Each opponent (1v1) or
-            group match (N-Player) counts as <em>one</em> game, not one per round; the winner is the side
-            with the higher <em>average points per round</em>.</li>
-        <li><strong>Points</strong> = <code>avg_points_per_round / max_round_points</code>, where
-            <code>avg_points_per_round = total_points / total_rounds_played</code> and
-            <code>max_round_points</code> is the largest single-round payoff available (e.g. 5 for the
-            default matrix). A throughput proxy in [0, 1].</li>
-        <li><strong>Cooperation</strong> = the mean of each selected mode's cooperation rate
-            (<code>coop_rate = cooperate_moves / moves_in_that_mode</code>), with modes weighted
-            <strong>equally</strong> so a long Stochastic match can't outweigh a short Standard one.</li>
-    </ul>
-    <p>The final <strong>Weighted Score</strong> sums each fraction × its weight, scaled to 100:</p>
-    <div class="formula">Score = (win_rate·W<sub>win</sub> + cooperation·W<sub>coop</sub> + points·W<sub>points</sub>) × 100</div>
-    <p style="font-size: 0.88em; color: var(--text-secondary);">
-        Weights are chosen when the tournament is configured and fixed for that run. Because Points use the
-        per-round average, Win rate counts once per opponent, and Cooperation weights modes equally,
-        <strong>match length never biases the score</strong>.
-    </p>
+    <!-- ===== Scoring ===== -->
+    <details class="gi-sub">
+        <summary><i class="fas fa-scale-balanced"></i> How the score is calculated (1v1 &amp; N-Player)</summary>
+        <div class="gi-content">
+            <p>Each strategy earns three component scores, each a fraction from 0 to 1:</p>
+            <ul>
+                <li><strong>Win rate</strong> — <code>wins / (wins + draws + losses)</code>. Each opponent
+                    (1v1) or group match (N-Player) is one game; the winner is whoever has the higher
+                    average points per round.</li>
+                <li><strong>Points</strong> — your average points per round, divided by the best possible
+                    single-round payoff. A throughput proxy.</li>
+                <li><strong>Cooperation</strong> — your cooperation rate, averaged across the selected modes
+                    (each mode weighted equally).</li>
+            </ul>
+            <p>The final <strong>Weighted Score</strong> adds each fraction × its weight, scaled to 100:</p>
+            <div class="formula">Score = (win_rate · W<sub>win</sub> + cooperation · W<sub>coop</sub> + points · W<sub>points</sub>) × 100</div>
+            <p class="muted">Weights are set when the tournament is configured. Because points use a
+                per-round average, win rate counts once per opponent, and cooperation weights modes equally,
+                <strong>match length never biases the score</strong>.</p>
+            <p class="muted">A strategy must return exactly <code>'C'</code> or <code>'D'</code>. One that crashes,
+                loops forever, or returns anything else (e.g. <code>1</code>, <code>None</code>, <code>'c'</code>)
+                <strong>forfeits</strong> that match, and the results say which strategy failed and why.</p>
+        </div>
+    </details>
 
-    <!-- ===== Game modes ===== -->
-    <h4><i class="fas fa-dice"></i> Game modes</h4>
-    <ul style="line-height: 1.5;">
-        <li><strong>Standard</strong> — a fixed number of rounds; each round's payoff added normally.</li>
-        <li><strong>Discounted</strong> — round <code>t</code>'s payoff is multiplied by
-            <code>discount_factor<sup>t</sup></code>, so future rounds matter less.</li>
-        <li><strong>Stochastic</strong> — after round 1 the game continues each round with probability
-            <code>stochastic_prob</code> and otherwise stops, so match length varies.</li>
-        <li><strong>Random Iterations</strong> — a seeded random round count (same seed ⇒ same length);
-            scores are normalised so the random length doesn't bias results.</li>
-    </ul>
-    <p style="font-size: 0.9em; color: var(--text-secondary);">Selecting multiple modes runs the tournament
-        once per mode and aggregates the scores.</p>
+    <!-- ===== Game modes (match length) ===== -->
+    <details class="gi-sub">
+        <summary><i class="fas fa-dice"></i> Match-length modes</summary>
+        <div class="gi-content">
+            <ul>
+                <li><strong>Standard</strong> — a fixed number of rounds; payoffs added normally.</li>
+                <li><strong>Discounted</strong> — later rounds count for less
+                    (<code>discount_factor<sup>t</sup></code>).</li>
+                <li><strong>Stochastic</strong> — after round 1 the game continues with probability
+                    <code>stochastic_prob</code> each round, so length varies.</li>
+                <li><strong>Random Iterations</strong> — a seeded random round count; scores are normalised
+                    so the length doesn't bias results.</li>
+            </ul>
+            <p class="muted">Pick several and the tournament runs once per mode, then aggregates the scores.</p>
+        </div>
+    </details>
 
     <!-- ===== N-player payoff models ===== -->
-    <h4><i class="fas fa-coins"></i> N-player payoff models</h4>
-    <ul style="line-height: 1.5;">
-        <li><strong>Public Goods</strong> — each cooperator pays cost <code>c</code>; the pool returns
-            benefit <code>b·k</code> (or non-linear <code>b·k<sup>α</sup></code>) split among all <code>n</code>
-            players. A cooperator nets <code>(b·k)/n − c</code>; a defector nets <code>(b·k)/n</code>
-            (where <code>k</code> = number of cooperators).</li>
-        <li><strong>Pairwise Matrix</strong> — each player plays the 2-player matrix against every other in
-            the group; per-round results are aggregated (sum or average).</li>
-        <li><strong>K-Cooperator Tensor</strong> — payoff depends only on the cooperator count <code>k</code>:
-            a cooperator gets <code>u_C[k]</code>, a defector gets <code>u_D[k]</code>, read from the supplied tables.</li>
-    </ul>
+    <details class="gi-sub">
+        <summary><i class="fas fa-coins"></i> N-Player payoff models</summary>
+        <div class="gi-content">
+            <ul>
+                <li><strong>Public Goods</strong> — each cooperator pays a cost <code>c</code>; the shared
+                    pool pays everyone back. With <code>k</code> cooperators among <code>n</code> players,
+                    a cooperator nets <code>(b·k)/n − c</code> and a defector nets <code>(b·k)/n</code>.</li>
+                <li><strong>Pairwise Matrix</strong> — each player plays the 2-player matrix against every
+                    other in the group; per-round results are summed or averaged.</li>
+                <li><strong>K-Cooperator Tensor</strong> — payoff depends only on how many cooperated:
+                    a cooperator gets <code>u_C[k]</code>, a defector gets <code>u_D[k]</code>.</li>
+            </ul>
+        </div>
+    </details>
 
     <!-- ===== OS simulation ===== -->
-    <h4><i class="fas fa-microchip"></i> How the OS simulation works</h4>
-    <p>OS Simulation is a <strong>standalone</strong> benchmark (independent of the tournaments). Each
-        selected strategy becomes the <em>scheduling personality</em> of a simulated multi-core CPU
-        (<code>OSSimulator</code>), and we measure how well it schedules a workload.</p>
-    <ul style="line-height: 1.5;">
-        <li><strong>Cores</strong> — you choose 2–8. There is no ring pairing: at each dispatch a core plays
-            one PD move against a shared <strong>contention signal</strong> — the system is "congested"
-            (the core sees Defect) when the ready queue is longer than the core count
-            (<code>len(ready) &gt; num_cores</code>) or a majority of the other cores are currently
-            defecting; otherwise it sees Cooperate. <strong>Cooperate = yield the CPU; Defect = keep running.</strong></li>
-        <li><strong>Assignment</strong> — <em>Homogeneous</em> benchmarks each strategy alone on all N cores;
-            <em>Heterogeneous</em> places different strategies on different cores and ranks the mixtures.</li>
-        <li><strong>Baseline</strong> — every run also executes the <em>plain</em> version of the chosen
-            scheduler (cores never yield) on the same workloads, drawn as a reference so you can see what
-            the strategies add over the textbook policy.</li>
-        <li><strong>Cooperation</strong> — each strategy's realised Cooperate rate is reported and plotted,
-            so OS behaviour lines up with the 1v1 / N-Player cooperation metric.</li>
-    </ul>
-
-    <p style="margin-bottom: 4px;">The chosen scheduler interprets each Cooperate/Defect bit natively:</p>
-    <table class="gi">
-        <thead><tr><th>Scheduler</th><th>Mechanism</th><th>Cooperate (yield)</th><th>Defect (keep running)</th></tr></thead>
-        <tbody>
-            <tr><td><strong>FCFS</strong></td><td>FIFO, run-to-completion</td><td>little effect (runs to completion)</td><td>—</td></tr>
-            <tr><td><strong>Round Robin</strong></td><td>fixed time quantum</td><td>short quantum (releases the core sooner)</td><td>long quantum (hogs the core)</td></tr>
-            <tr><td><strong>SJF / SRTF</strong></td><td>shortest job first</td><td>picks the shortest ready job</td><td>grabs the longest job and monopolises</td></tr>
-            <tr><td><strong>Priority</strong></td><td>preemptive priority</td><td>short quantum at low priority</td><td>runs to completion at top priority</td></tr>
-            <tr><td><strong>MLFQ</strong></td><td>multi-level queues + periodic boost</td><td>voluntary yield → stays interactive (high level)</td><td>burns its quantum → demoted a level</td></tr>
-            <tr><td><strong>CFS</strong></td><td>weighted fair share (vruntime)</td><td>low weight → recedes, lets others catch up</td><td>high weight → captures a larger share</td></tr>
-            <tr><td><strong>Affinity-aware</strong></td><td>per-core run-queues + load balancer</td><td>accepts migration (pays cold-cache cost)</td><td>refuses migration (keeps its cache warm)</td></tr>
-        </tbody>
-    </table>
+    <details class="gi-sub">
+        <summary><i class="fas fa-microchip"></i> How the OS simulation works</summary>
+        <div class="gi-content">
+            <p>A standalone benchmark (separate from the tournaments). Each strategy becomes the
+                <em>scheduling personality</em> of a simulated multi-core CPU, and we measure how well it
+                schedules a workload.</p>
+            <ul>
+                <li><strong>Cores</strong> — choose 2–8. At each dispatch a core plays one PD move against a
+                    shared <strong>contention signal</strong>: it sees Defect when the system is congested
+                    (ready queue longer than the core count, or most other cores are defecting), otherwise
+                    Cooperate. <strong>Cooperate = yield the CPU; Defect = keep running.</strong></li>
+                <li><strong>Assignment</strong> — <em>Homogeneous</em> tests one strategy on all cores;
+                    <em>Heterogeneous</em> mixes different strategies across cores and ranks the mixtures.</li>
+                <li><strong>Baseline</strong> — each run also executes the plain textbook scheduler (cores
+                    never yield) for reference, so you can see what the strategies add.</li>
+                <li><strong>Cooperation</strong> — each strategy's realised Cooperate rate is reported, to
+                    line up with the 1v1 / N-Player cooperation metric.</li>
+            </ul>
+            <p style="margin-bottom: 4px;">Each scheduler interprets Cooperate / Defect in its own way:</p>
+            <div class="gi-scroll">
+            <table class="gi">
+                <thead><tr><th>Scheduler</th><th>Mechanism</th><th>Cooperate (yield)</th><th>Defect (keep running)</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>FCFS</strong></td><td>FIFO, run-to-completion</td><td>little effect (runs to completion)</td><td>—</td></tr>
+                    <tr><td><strong>Round Robin</strong></td><td>fixed time quantum</td><td>short quantum (releases the core sooner)</td><td>long quantum (hogs the core)</td></tr>
+                    <tr><td><strong>SJF / SRTF</strong></td><td>shortest job first</td><td>picks the shortest ready job</td><td>grabs the longest job and monopolises</td></tr>
+                    <tr><td><strong>Priority</strong></td><td>preemptive priority</td><td>short quantum at low priority</td><td>runs to completion at top priority</td></tr>
+                    <tr><td><strong>MLFQ</strong></td><td>multi-level queues + periodic boost</td><td>voluntary yield → stays interactive (high level)</td><td>burns its quantum → demoted a level</td></tr>
+                    <tr><td><strong>CFS</strong></td><td>weighted fair share (vruntime)</td><td>low weight → recedes, lets others catch up</td><td>high weight → captures a larger share</td></tr>
+                    <tr><td><strong>Affinity-aware</strong></td><td>per-core run-queues + load balancer</td><td>accepts migration (pays cold-cache cost)</td><td>refuses migration (keeps its cache warm)</td></tr>
+                </tbody>
+            </table>
+            </div>
+        </div>
+    </details>
 
     <!-- ===== Workload dataset ===== -->
-    <h4><i class="fas fa-database"></i> The workload dataset</h4>
-    <p>Each run executes against a <strong>seeded, synthetic dataset</strong> of
-        <code>50</code> processes. Every process is drawn from the run's Seed (so a seed reproduces the
-        exact dataset) and is defined by three things:</p>
-    <ul style="line-height: 1.5;">
-        <li><strong>Arrival time</strong> — when it joins the ready queue (set by the profile, below).</li>
-        <li><strong>CPU burst</strong> — how many ticks of CPU it needs.</li>
-        <li><strong>Memory working set</strong> — a per-process footprint (log-normal, median 4&nbsp;KB,
-            σ&nbsp;0.5, clamped 1–32&nbsp;KB) from which a per-tick <strong>memory-access stream</strong> is
-            generated; those addresses drive cache hits/misses.</li>
-    </ul>
-    <p style="margin-bottom: 4px;">Four profiles model distinct, well-studied workload shapes (benchmarked
-        across all four; viewable individually or averaged via the results dropdown):</p>
-    <table class="gi">
-        <thead><tr><th>Profile</th><th>Arrivals</th><th>CPU bursts</th></tr></thead>
-        <tbody>
-            <tr><td><strong>Uniform</strong></td><td>every 15 ticks (steady)</td><td>flat 30–80 (light-tailed)</td></tr>
-            <tr><td><strong>Poisson</strong></td><td>exponential, mean 20 ticks</td><td>log-normal (median 45, σ 0.6), clamped 10–400</td></tr>
-            <tr><td><strong>Mixed</strong></td><td>every 10 ticks</td><td>bimodal: 80% short (median 20) + 20% long (median 280)</td></tr>
-            <tr><td><strong>Bursty</strong></td><td>batches of 10, every 300 ticks</td><td>log-normal (median 35, σ 0.55)</td></tr>
-        </tbody>
-    </table>
-    <p style="font-size: 0.88em; color: var(--text-secondary);">
-        <strong>Why representative:</strong> real CPU service times are heavy-tailed (most jobs short, a few
-        very long), so bursts use a clamped log-normal; arrivals use the Poisson model; and working-set
-        sizes vary so cache pressure differs across jobs. Together the four span light/steady, random,
-        interactive-plus-batch and spiky loads.</p>
+    <details class="gi-sub">
+        <summary><i class="fas fa-database"></i> The workload dataset</summary>
+        <div class="gi-content">
+            <p>Each run uses a <strong>seeded, synthetic dataset</strong> of <code>50</code> processes (same
+                seed ⇒ same dataset). Every process has:</p>
+            <ul>
+                <li><strong>Arrival time</strong> — when it joins the ready queue.</li>
+                <li><strong>CPU burst</strong> — how many ticks of CPU it needs.</li>
+                <li><strong>Memory working set</strong> — a per-process footprint (log-normal, median 4&nbsp;KB,
+                    clamped 1–32&nbsp;KB) that generates a memory-access stream driving cache hits/misses.</li>
+            </ul>
+            <p style="margin-bottom: 4px;">Four profiles model different real-world load shapes:</p>
+            <div class="gi-scroll">
+            <table class="gi">
+                <thead><tr><th>Profile</th><th>Arrivals</th><th>CPU bursts</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Uniform</strong></td><td>every 15 ticks (steady)</td><td>flat 30–80 (light-tailed)</td></tr>
+                    <tr><td><strong>Poisson</strong></td><td>exponential, mean 20 ticks</td><td>log-normal (median 45, σ 0.6), clamped 10–400</td></tr>
+                    <tr><td><strong>Mixed</strong></td><td>every 10 ticks</td><td>80% short (median 20) + 20% long (median 280)</td></tr>
+                    <tr><td><strong>Bursty</strong></td><td>batches of 10, every 300 ticks</td><td>log-normal (median 35, σ 0.55)</td></tr>
+                </tbody>
+            </table>
+            </div>
+            <p class="muted">Why these: real CPU service times are heavy-tailed (most jobs short, a few very
+                long), so bursts use a clamped log-normal and arrivals use the Poisson model. Together the four
+                span light/steady, random, interactive-plus-batch and spiky loads.</p>
+        </div>
+    </details>
 
     <!-- ===== Simulation loop + metrics ===== -->
-    <h4><i class="fas fa-gears"></i> How the simulation runs &amp; records metrics</h4>
-    <p>The simulator advances one <strong>tick</strong> at a time. Each tick:</p>
-    <ol style="line-height: 1.5; margin-left: 18px;">
-        <li>Processes whose arrival time has passed are admitted to the ready queue.</li>
-        <li>The scheduler does periodic housekeeping (MLFQ boosts, affinity load-balancing).</li>
-        <li>For each core: if it is idle or its time-slice expired, the core plays its PD move against the
-            contention signal, the scheduler <code>select</code>s the next job and sets its
-            <code>quantum</code>; the running job executes one tick. Memory accesses hit the
-            L1/L2/shared-L3 cache; cache stalls slow progress
-            (<code>work_done = 1 / (1 + stall·0.01)</code>), decrementing the job's remaining time.</li>
-        <li>On completion, the process's timing is recorded.</li>
-    </ol>
-    <p style="margin-bottom: 4px;">From the completed processes (<code>n</code> of them, over
-        <code>T</code> total ticks) the metrics are:</p>
-    <div class="formula">
-        turnaround = completion − arrival&nbsp;&nbsp;|&nbsp;&nbsp; <strong>Avg Turnaround</strong> = mean(turnaround)<br>
-        waiting = max(0, turnaround − burst)&nbsp;&nbsp;|&nbsp;&nbsp; <strong>Avg Wait</strong> = mean(waiting)<br>
-        response = first_start − arrival&nbsp;&nbsp;|&nbsp;&nbsp; <strong>Avg Response</strong> = mean(response)<br>
-        <strong>Throughput</strong> = n / T × 1000&nbsp;&nbsp;(jobs per 1000 ticks)<br>
-        <strong>Cache Misses</strong> = (Σ per-core L1+L2 misses + shared-L3 misses) / n<br>
-        <strong>Makespan</strong> = T&nbsp;&nbsp;|&nbsp;&nbsp; <strong>Cooperation %</strong> = Cooperate moves / total moves
-    </div>
-    <p style="font-size: 0.88em; color: var(--text-secondary);">
-        Lower is better for wait/turnaround/response/cache; higher is better for throughput/cooperation.
-        Each metric is computed per workload profile and then averaged across the four (and viewable per
-        profile). The cache is a fixed Skylake-class hierarchy (per-core L1 32&nbsp;KB + L2 512&nbsp;KB,
-        shared L3 8&nbsp;MB, 64&nbsp;B lines, LRU), so cache-miss numbers are always real.
-        <em>Reproducibility:</em> provide a Seed to make a run (and its dataset) fully deterministic.</p>
+    <details class="gi-sub">
+        <summary><i class="fas fa-gears"></i> How the simulation runs &amp; records metrics</summary>
+        <div class="gi-content">
+            <p>The simulator advances one <strong>tick</strong> at a time. Each tick:</p>
+            <ol>
+                <li>New processes (arrival time reached) enter the ready queue.</li>
+                <li>The scheduler does housekeeping (MLFQ boosts, affinity load-balancing).</li>
+                <li>Each free core plays its PD move, the scheduler picks the next job, and it runs one tick.
+                    Cache stalls slow progress.</li>
+                <li>On completion, the process's timing is recorded.</li>
+            </ol>
+            <p style="margin-bottom: 4px;">Metrics (over <code>n</code> finished jobs and <code>T</code> ticks):</p>
+            <div class="formula scroll">turnaround = completion − arrival      Avg Turnaround = mean(turnaround)
+waiting    = max(0, turnaround − burst) Avg Wait       = mean(waiting)
+response   = first_start − arrival      Avg Response   = mean(response)
+Throughput = n / T × 1000  (jobs per 1000 ticks)
+Cache Misses = (per-core L1+L2 misses + shared-L3 misses) / n
+Makespan   = T        Cooperation % = cooperate moves / total moves</div>
+            <p class="muted">Lower is better for wait / turnaround / response / cache; higher is better for
+                throughput / cooperation. Each metric is computed per profile, then averaged across the four.
+                Give a Seed to make a run fully reproducible.</p>
+        </div>
+    </details>
 
     </div>
 </details>
