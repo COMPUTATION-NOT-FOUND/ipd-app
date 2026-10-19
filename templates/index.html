@@ -517,6 +517,21 @@
                 <dd>Each core keeps its own queue so caches stay warm. Idle cores take work from busy ones, but a Defecting core refuses to give its work away.</dd>
                 <dt><strong>Baseline</strong></dt>
                 <dd>The chosen scheduler with no strategy at all, shown as a grey reference row and bar.</dd>
+                <dt><strong>Runs to average</strong></dt>
+                <dd>Each run makes up a different set of tasks (a different seed). One run can be lucky or
+                    unlucky; averaging several gives a fairer comparison.</dd>
+                <dt><strong>&plusmn; (confidence interval)</strong></dt>
+                <dd>How far the average could move with other task sets. If two strategies' ranges overlap,
+                    neither is clearly better.</dd>
+                <dt><strong>Tasks per workload</strong></dt>
+                <dd>How many tasks each run makes up. More tasks = more representative, but slower.</dd>
+                <dt><strong>Warm-up</strong></dt>
+                <dd>The first tasks find an empty system and are served unusually fast. Leaving them out
+                    measures normal running instead of the start-up.</dd>
+                <dt><strong>Load</strong></dt>
+                <dd>CPU time the tasks need compared with what the cores can give. Above 100% the cores can't
+                    keep up and the queue keeps growing, so waiting times depend on how many tasks you
+                    simulated. The results warn when this happens; more cores fixes it.</dd>
             </dl>
         </details>
 

@@ -22,9 +22,11 @@ There are two ways to run the app. Pick one.
 2. Put it in **its own folder**. The app keeps your saved strategies and settings next to itself.
 3. **Double-click it.** Your browser opens at **http://127.0.0.1:5000**. Keep the black window open
    while you use the app; close it to stop.
-4. *(To connect to the class website)* open the **Hub** tab, fill in **Connect to the class website**
-   with the address and class token your instructor gives you, and press **Connect**. The app tests
-   them, remembers them (in a `.env` file next to itself), and loads your classmates' strategies.
+4. *(To connect to the class website)* open the **Settings** tab, enter the address and class token
+   your instructor gives you, and press **Connect**. The app tests them, remembers them, and loads
+   your classmates' strategies. You only do this once: settings are kept on your computer (the
+   Settings tab shows where), so they survive closing the app, moving it, or downloading a new version.
+   Change or disconnect any time in Settings.
 
 > - **Windows** may say *"Windows protected your PC"* because the file isn't code-signed: click
 >   **More info → Run anyway** (only the first time).
@@ -84,8 +86,8 @@ pip install -r requirements.txt
 
 **Step 3 — connect to the class website (optional).** The app works fully offline. To see
 classmates' strategies and submit your own, the easiest way is in the app: after Step 4, open the
-**Hub** tab and fill in **Connect to the class website**. Or set it up by hand — copy the example
-config and add the two values your instructor gives you:
+**Settings** tab and press **Connect**. Or set it up by hand — copy the example config and add the
+two values your instructor gives you:
 
 ```bash
 cp .env.example .env                # Windows (PowerShell): copy .env.example .env
@@ -161,7 +163,12 @@ time estimate before a big run). N‑Player matches are capped at 1000 rounds.
   (Public Goods, Pairwise Matrix, or K‑Cooperator). Also ranked by Weighted Score.
 - **OS Simulation** — a fun twist: your strategy becomes a **CPU scheduler** (`Cooperate` = give up
   the CPU, `Defect` = keep it) and is scored on how well it runs a simulated multi‑core machine.
-  The tab has a short glossary of the scheduler terms (FCFS, MLFQ, CFS, …).
+  The tab has a short glossary of the scheduler terms (FCFS, MLFQ, CFS, …). By default each
+  strategy is run **10 times on different task sets and averaged**; the results show a **±** range
+  (if two strategies' ranges overlap, neither is clearly better). You can also choose 50–400 tasks
+  per run and leave out the first tasks as **warm-up**. If the results say *the cores can't keep
+  up*, the tasks need more CPU than the cores have, so waiting times depend on how many tasks you
+  simulated — add cores to compare normal running.
 
 **Choosing who competes.** Each run uses:
 - **Your local players** — the editable boxes where you write/paste strategies (the quick‑fill
