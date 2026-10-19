@@ -19,6 +19,45 @@ function osSimEsc(unsafe) {
 // Chart instances are tracked so re-renders can dispose the previous charts.
 let simChartInstances = [];
 
+// Chart.js defaults to 12px text, which reads as tiny in these dense charts.
+if (typeof Chart !== 'undefined' && Chart.defaults && Chart.defaults.font) Chart.defaults.font.size = 13;
+
+// Long labels (e.g. a four-strategy mixture, or "Baseline · plain Round Robin") were clipped on
+// the chart axis. Split them into lines of at most `maxLen` characters (Chart.js draws an array
+// label as one line per element).
+function osWrapLabel(label, maxLen) {
+    maxLen = maxLen || 22;
+    const s = String(label == null ? '' : label);
+    if (s.length <= maxLen) return s;
+    const lines = [];
+    let cur = '';
+    s.split(' ').forEach(tok => {
+        while (tok.length > maxLen) {          // a single over-long token: hard-split it
+            if (cur) { lines.push(cur); cur = ''; }
+            lines.push(tok.slice(0, maxLen));
+            tok = tok.slice(maxLen);
+        }
+        if (cur && (cur + ' ' + tok).length > maxLen) { lines.push(cur); cur = tok; }
+        else cur = cur ? cur + ' ' + tok : tok;
+    });
+    if (cur) lines.push(cur);
+    return lines;
+}
+
+// Auto-ranged axes zoom in on tiny differences: a throughput spread of 40.11 to 40.13 filled the
+// whole axis and looked like a big gap. Keep at least `minRel` of the values' magnitude in view
+// so small differences look small. Returns {} (auto range) when the spread is already wide.
+function osAxisRange(values, minRel) {
+    const v = values.filter(x => typeof x === 'number' && isFinite(x));
+    if (!v.length) return {};
+    const lo = Math.min(...v), hi = Math.max(...v);
+    const minSpan = Math.max(Math.abs(lo), Math.abs(hi), 1e-9) * (minRel || 0.2);
+    if (hi - lo >= minSpan) return {};
+    let min = (lo + hi) / 2 - minSpan / 2, max = (lo + hi) / 2 + minSpan / 2;
+    if (lo >= 0 && min < 0) { max -= min; min = 0; }
+    return { min, max };
+}
+
 const OS_SIM_SCHEDULER_LABELS = {
     fcfs: 'FCFS', round_robin: 'Round Robin', sjf: 'SJF / SRTF',
     priority: 'Priority', mlfq: 'MLFQ', cfs: 'CFS', affinity: 'Affinity-aware'
@@ -50,7 +89,7 @@ function simEntries(sim, profile) {
     if (het && Array.isArray(het.results) && het.results.length) {
         return het.results.map(r => {
             const src = (useProf && r.workloads && r.workloads[profile]) ? r.workloads[profile] : r;
-            return Object.assign({ label: Object.keys(r.combination || {}).join('+') }, osPickMetrics(src));
+            return Object.assign({ label: Object.keys(r.combination || {}).join(' + ') }, osPickMetrics(src));
         });
     }
     const homo = sim.core_simulation_results;
@@ -92,10 +131,12 @@ function createSimulationComparisonChart(sim, profile) {
         const barEntries = baseline ? entries.concat([baseline]) : entries;
         simChartInstances.push(new Chart(barCtx, {
             type: 'bar',
-            data: { labels: barEntries.map(e => e.label),
+            data: { labels: barEntries.map(e => osWrapLabel(e.label)),
                 datasets: [{ label: 'Throughput', data: barEntries.map(e => e.throughput),
                     backgroundColor: barEntries.map(e => e.isBaseline ? osBaselineColor() : srAlpha(srToken('--chart-1', '#2dd4bf'), 60)) }] },
+            // Bars start at 0 so their lengths compare honestly.
             options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+                scales: { x: { beginAtZero: true } },
                 plugins: { legend: { display: false } } }
         }));
     }
@@ -109,11 +150,14 @@ function createSimulationComparisonChart(sim, profile) {
         if (baseline) datasets.push({ label: 'baseline', pointStyle: 'rectRot', pointRadius: 8,
             data: [{ x: baseline.response, y: baseline.throughput, label: baseline.label }],
             backgroundColor: osBaselineColor() });
+        const all = baseline ? entries.concat([baseline]) : entries;
         simChartInstances.push(new Chart(scCtx, {
             type: 'scatter', data: { datasets },
             options: { responsive: true, maintainAspectRatio: false,
-                scales: { x: { title: { display: true, text: 'Avg Response (lower better)' } },
-                          y: { title: { display: true, text: 'Throughput (higher better)' } } },
+                scales: { x: Object.assign({ title: { display: true, text: 'Avg Response (lower better)' } },
+                                           osAxisRange(all.map(e => e.response))),
+                          y: Object.assign({ title: { display: true, text: 'Throughput (higher better)' } },
+                                           osAxisRange(all.map(e => e.throughput))) },
                 plugins: { legend: { display: !!baseline },
                     tooltip: { callbacks: { label: (c) => `${c.raw.label}: tp ${c.raw.y.toFixed(1)}, resp ${c.raw.x.toFixed(1)}` } } } }
         }));
@@ -128,7 +172,8 @@ function createSimulationComparisonChart(sim, profile) {
             data: entries.map(e => ({ x: e.throughput, y: e.coop, label: e.label })),
             backgroundColor: srToken('--chart-1', '#2dd4bf') }] },
         options: { responsive: true, maintainAspectRatio: false,
-            scales: { x: { title: { display: true, text: 'Throughput (higher better)' } },
+            scales: { x: Object.assign({ title: { display: true, text: 'Throughput (higher better)' } },
+                                       osAxisRange(entries.map(e => e.throughput))),
                       y: { min: 0, max: 100, title: { display: true, text: 'Cooperation %' } } },
             plugins: { legend: { display: false },
                 tooltip: { callbacks: { label: (c) => `${c.raw.label}: tp ${c.raw.x.toFixed(1)}, coop ${c.raw.y.toFixed(1)}%` } } } }
@@ -363,12 +408,25 @@ function renderOSSimulation(container, sim, opts) {
         <div id="simMetricsTable"></div>
     </div>`;
 
+    // Only one way to place the strategies: e.g. 4 strategies on 4 cores, each used once.
+    if (isHet && hetTotal === 1) {
+        html += `<p style="color:var(--text-secondary); font-size:0.9em;"><i class="fas fa-circle-info"></i>
+            With ${numCores} cores and ${numCores} strategies there is only one possible mixture (each strategy
+            is used once), so there is nothing to rank against. Add strategies or lower the core count to
+            compare mixtures.</p>`;
+    }
+
+    // Two charts per row on a normal screen. Chart.js sizes a responsive canvas from its parent,
+    // which must be position:relative and contain only the canvas; `min-width:0` lets a grid cell
+    // shrink below the canvas's previous width. Without these the charts rendered small.
+    const nBars = simEntries(sim, 'avg').length + (simBaselineEntry(sim, 'avg') ? 1 : 0);
+    const barHeight = Math.max(300, 34 * nBars + 60);
     html += `
-        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:20px; margin-top:10px;">
-            <div><h4>Throughput</h4><div style="height:300px;"><canvas id="simThroughputChart"></canvas></div></div>
-            <div><h4>Throughput &uarr; vs Response &darr;</h4><div style="height:300px;"><canvas id="simScatterChart"></canvas></div></div>
-            <div><h4>Cooperation &uarr; vs Throughput</h4><div style="height:300px;"><canvas id="simCoopChart"></canvas></div></div>
-            <div style="grid-column:1/-1;"><h4>Normalised metric profile</h4><div style="height:340px;"><canvas id="simRadarChart"></canvas></div></div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(420px, 1fr)); gap:24px; margin-top:10px;">
+            <div style="min-width:0;"><h4>Throughput</h4><div style="position:relative; height:${barHeight}px;"><canvas id="simThroughputChart"></canvas></div></div>
+            <div style="min-width:0;"><h4>Throughput &uarr; vs Response &darr;</h4><div style="position:relative; height:320px;"><canvas id="simScatterChart"></canvas></div></div>
+            <div style="min-width:0;"><h4>Cooperation &uarr; vs Throughput</h4><div style="position:relative; height:320px;"><canvas id="simCoopChart"></canvas></div></div>
+            <div style="min-width:0;"><h4>Normalised metric profile <span style="font-weight:normal; color:var(--text-secondary); font-size:0.8em;">(outer = better)</span></h4><div style="position:relative; height:340px;"><canvas id="simRadarChart"></canvas></div></div>
         </div>`;
 
     // Per-core timeline(s): traces are tagged with {label = strategy/mixture, workload = dataset}.
@@ -423,8 +481,9 @@ function renderOSSimulation(container, sim, opts) {
             if (ganttCap) {
                 const wl = (profile && profile !== 'avg') ? profile : 'Mixed';
                 ganttCap.textContent = profile === 'avg'
-                    ? `Workload: ${wl} (representative — pick a dataset above to match the timeline to the metrics).`
-                    : `Workload: ${wl}.`;
+                    ? `Timeline workload: ${wl}. The table above averages all four workloads, and an average has no `
+                      + `single timeline, so one workload is shown. Pick a workload in "Workload dataset" to see its own.`
+                    : `Timeline workload: ${wl} (same as the table).`;
             }
         };
 
