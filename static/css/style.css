@@ -503,6 +503,10 @@ tr:hover td {
    route in signal.
    ========================================================================= */
 
+/* The nav below is sticky and floats over the page, so anything scrolled to its top edge (results,
+   error messages via scrollIntoView) would sit hidden underneath it. Leave room for it. */
+html { scroll-padding-top: 110px; }
+
 .sr-nav-wrap {
     position: sticky;
     top: 12px;

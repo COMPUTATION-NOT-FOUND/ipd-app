@@ -67,8 +67,10 @@
             icon.className = theme === 'light' ? 'fas fa-moon' : 'fas fa-sun';
         }
         btn.setAttribute('aria-pressed', theme === 'light' ? 'true' : 'false');
-        btn.setAttribute('aria-label',
-            theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme');
+        var label = theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme';
+        btn.setAttribute('aria-label', label);
+        // Hover text too: at this size the sun icon is easy to mistake for a settings gear.
+        btn.setAttribute('title', label);
     }
 
     document.addEventListener('DOMContentLoaded', function () {
