@@ -2776,7 +2776,20 @@ if __name__ == '__main__':
     else:
         print("Debug mode is disabled (production-safe)")
     
+    # Always loopback: this single-user app auto-logs in the local owner, so it must never listen
+    # on the network (there is no host flag to forget).
     host = '127.0.0.1'
     port = 5000
     print(f"Starting server on http://{host}:{port}")
-    app.run(host=host, port=port, debug=debug_mode)
+    if debug_mode:
+        app.run(host=host, port=port, debug=True)
+    else:
+        # Waitress (already a dependency) instead of the Flask dev server, which can hang on
+        # Windows. This makes `python app.py` the one run command on every OS.
+        try:
+            from waitress import serve
+        except ImportError:
+            app.run(host=host, port=port, debug=False)
+        else:
+            print("Press Ctrl+C to stop.")
+            serve(app, host=host, port=port)

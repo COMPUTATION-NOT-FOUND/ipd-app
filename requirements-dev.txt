@@ -1,0 +1,4 @@
+# Everything in requirements.txt plus the test tools (only needed to run the test suite).
+-r requirements.txt
+pytest~=9.1.1
+pytest-cov~=7.1.0

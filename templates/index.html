@@ -72,7 +72,7 @@
     <div class="strategy" style="border-left: 4px solid var(--warning-color);">
         <h3 style="color: var(--warning-color) !important;"><i class="fas fa-exclamation-triangle"></i> Important Rules</h3>
         <ul style="text-align: left; margin: 10px 0; padding-left: 20px;">
-            <li><strong>One signature works everywhere:</strong> The recommended, unified signature runs in <strong>all three modes</strong> — 1v1, N-Player, and OS Simulation. If your strategy is named "myStrategy", write:<br>
+            <li><strong>One signature works everywhere:</strong> The recommended, unified signature runs in <strong>all three modes</strong> — 1v1, N-Player, and OS Simulation. Write one function with these four parameters (any function name):<br>
                 <code>def myStrategy(last_moves, my_history, opponents_histories, meta):</code>
                 <ul style="margin: 6px 0 0 0; padding-left: 18px;">
                     <li><code>last_moves</code> — list of each opponent's last move (in 1v1 / OS sim this is a single-element list; empty on the first round).</li>
@@ -82,8 +82,8 @@
                     <li><code>meta['tournament_info']</code> — context dict (ranking <code>weights</code>, active <code>modes</code>, <code>n_players</code>); <code>meta['player_index']</code> and <code>meta['n_players']</code> — your seat and the group size.</li>
                 </ul>
             </li>
-            <li><strong>Function Name Must Match Strategy Name:</strong> the function name must equal the strategy name you enter.</li>
-            <li><strong>Return Only 'C' or 'D':</strong> Return exactly <code>'C'</code> to cooperate (yield the CPU) or <code>'D'</code> to defect (keep running). Any other value fails the strategy.</li>
+            <li><strong>The strategy name is just a label:</strong> it can contain spaces (e.g. "Grim Trigger") and does <em>not</em> have to match your function's name. Your code only needs to define one strategy function with the signature above.</li>
+            <li><strong>Return Only 'C' or 'D':</strong> Return exactly <code>'C'</code> to cooperate or <code>'D'</code> to defect (in the OS Simulation: yield the CPU / keep running). Anything else — <code>1</code>, <code>None</code>, <code>True</code>, lowercase <code>'c'</code> — fails the strategy: it <strong>forfeits</strong> that match and the results say why. The same happens if it crashes or loops forever.</li>
             <li><strong>Handle the first round:</strong> on the first round <code>last_moves</code> is an empty list (no history yet).</li>
             <li><strong>Legacy 3-arg form still accepted:</strong> the older <code>def myStrategy(opponent_last_move, my_history, opponent_history)</code> still works (it sees all opponents as one aggregated opponent; <code>opponent_last_move</code> is <code>None</code> on the first round). A separate <code>myStrategy_nplayer</code> companion is <strong>no longer required</strong>, though it is still honoured if present.</li>
             <li><strong>Perfect Python Syntax Required:</strong> Any syntax error causes your strategy to fail completely.</li>
@@ -92,7 +92,8 @@
             <li><strong>Classes and exception handling work:</strong> you may define <code>class</code>es inside or alongside your strategy, and <code>try</code>/<code>except</code> is supported for the standard exception types (<code>Exception, ValueError, TypeError, KeyError, IndexError, LookupError, AttributeError, NameError, ZeroDivisionError, ArithmeticError, OverflowError, FloatingPointError, RuntimeError, RecursionError, StopIteration, NotImplementedError, AssertionError</code>). Note that <code>except Exception</code> will <em>not</em> catch the instruction-limit abort, so it cannot be used to hide an infinite loop.</li>
             <li><strong>Attribute access:</strong> <code>getattr</code>, <code>setattr</code>, <code>hasattr</code> and <code>delattr</code> are available but cannot reach names beginning with an underscore — the same rule that blocks writing <code>x.__class__</code> directly. Storing state on your own function (e.g. <code>MyStrategy.counter = 0</code>) is fine.</li>
             <li><strong>Per-round work limit:</strong> each call to your strategy may execute up to <strong>200,000</strong> Python line-steps. That is generous enough for history-scanning and model-building strategies, but an infinite loop is aborted and the match ends.</li>
-            <li><strong>OS Simulation specifics:</strong> there is <strong>no cap on strategies</strong> (it runs on your own machine, so you get a time estimate before a big run instead). Cores must be <strong>2&#8211;8</strong>. <em>Homogeneous</em> benchmarks each strategy across all cores; <em>Heterogeneous</em> evaluates <strong>every</strong> combination of your strategies across the cores, so it needs at least as many strategies as cores. A heterogeneous run is time-boxed to <strong>5 minutes</strong> and reports a random sample of the combinations if it runs out; tick <strong>Remove limits</strong> to sweep all of them.</li>
+            <li><strong>Limits:</strong> there is <strong>no cap on how many strategies</strong> you add in any mode (it runs on your own machine, so you get a time estimate before a big run instead). N-Player matches are limited to <strong>1000 rounds</strong>.</li>
+            <li><strong>OS Simulation specifics:</strong> Cores must be <strong>2&#8211;8</strong>. <em>Homogeneous</em> benchmarks each strategy across all cores; <em>Heterogeneous</em> evaluates <strong>every</strong> combination of your strategies across the cores, so it needs at least as many strategies as cores. A heterogeneous run is time-boxed to <strong>5 minutes</strong> and reports a random sample of the combinations if it runs out; tick <strong>Remove limits</strong> to sweep all of them.</li>
             <li><strong>Strategy Names Must Be Unique:</strong> Each strategy must have a different name.</li>
         </ul>
         <div style="background: rgba(16, 185, 129, 0.1); padding: 10px; border-radius: 5px; margin-top: 10px; border: 1px solid var(--success-color);">
@@ -960,7 +961,7 @@
               <div class="results" style="border:1px solid var(--info-color); margin-top:20px; background: var(--bg-card);">
                 <h3><i class="fas fa-cloud-arrow-up"></i> Submit results to website (instructors only)</h3>
                 <p style="color: var(--text-secondary);"><i class="fas fa-circle-info"></i> Students: you don't
-                need this. It publishes an official result and only works with the instructor's website login.</p>
+                need this. It stages an official result, and nothing is published until the instructor logs in on the website and confirms.</p>
                 <p>Publishes this tournament to the website. ${plural(locals, 'local player')} will be saved there
                 as bots (player submissions and practice strategies are not re-registered). You'll log in
                 on the website and choose post-now or schedule.</p>

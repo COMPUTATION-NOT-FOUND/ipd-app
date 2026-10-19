@@ -9,10 +9,11 @@ runtime guards around strategy execution.
 
 ## What's covered
 
-**`test_sandbox_hardening.py`** (the only test file here) exercises the two in-process
-static defenses in `is_safe_code()` (app.py). These exist because the PythonAnywhere free
-tier can't spawn a subprocess for OS-level isolation, so the screen has to catch these
-patterns statically:
+There are three test files here.
+
+**`test_sandbox_hardening.py`** exercises the two in-process static defenses in
+`is_safe_code()` (app.py). These exist because the PythonAnywhere free tier can't spawn a
+subprocess for OS-level isolation, so the screen has to catch these patterns statically:
 
 - **String-based attribute traversal** — `str.format` / `str.format_map` and
   `string.Formatter` field syntax (`"{0.__class__.__init__.__globals__}".format(obj)`) can
@@ -25,20 +26,42 @@ patterns statically:
   factor or `[0] * 100` must still pass (there are explicit regression cases for real
   strategies that use these).
 
+**`test_operator_guard.py`** covers the guarded `operator` module. `operator.attrgetter` /
+`methodcaller` take attribute names as strings, which the AST screen can't see, so strategies
+get a copy of `operator` that applies the guarded-`getattr` rule (no names starting with `_`).
+It checks both sandboxes (1v1 / N-Player in `app.py`, the OS sim in `core_simulation.py`), both
+import forms, that ordinary `operator` use still works, and that one strategy can't tamper with
+another's copy. (Fix contributed by a student security review, Oct 2026.)
+
+**`test_isolation.py`** covers **sandbox mode** ("Run in sandbox mode" on the 1v1, N-Player
+and OS Simulation tabs): each strategy is test-run in a worker process with a wall-clock
+timeout first, and ones that hang (e.g. catastrophic regex in C) or crash are flagged and left
+out.
+
 Each test follows the convention: **it PASSES when the dangerous construct is rejected and
 benign code is still allowed.**
 
 ## Related defenses (tested elsewhere / by inspection)
 
 - The runtime guards — `_guarded_getattr/_setattr/_delattr/_hasattr`, the restricted
-  `_SANDBOX_BUILTINS`, the `__import__` allow-list, and the `run_with_limit` instruction
-  cap — live in `app.py` / `core_simulation.py` / `n_player_simulation.py`.
-- The optional **isolated run mode** (worker-process execution with a wall-clock timeout
-  that flags strategies which hang or crash) is covered by `tests/security/test_isolation.py`.
+  `_SANDBOX_BUILTINS`, the `__import__` allow-list (`core_simulation.guarded_import`), and the
+  `run_with_limit` instruction cap — live in `app.py` / `core_simulation.py` /
+  `n_player_simulation.py`.
+- Strict move checking (`validate_move`) and forfeits on a crash, infinite loop or bad return
+  are covered by `tests/regression/test_strict_moves_and_forfeit.py`.
 
 ## Running
+
+Linux / macOS (bash):
 
 ```bash
 RUN_TOURNAMENTS_SYNC=true FLASK_ENV=development FLASK_SECRET_KEY=test \
     python -m pytest tests/security -q
+```
+
+Windows (PowerShell):
+
+```powershell
+$env:RUN_TOURNAMENTS_SYNC='true'; $env:FLASK_ENV='development'; $env:FLASK_SECRET_KEY='test'
+python -m pytest tests/security -q
 ```
