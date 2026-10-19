@@ -84,9 +84,10 @@
         <!-- Imported code panel -->
         <div class="card" id="importPanel" style="display:none;">
             <h3><i class="fas fa-download"></i> Imported: <span id="importName"></span></h3>
-            <p>Screened and accepted by this machine's sandbox. Copy it into the Practice editor to play
-            against it.</p>
+            <p>Screened and accepted by this machine's sandbox. Open it in the Practice editor to play
+            against it, or copy the code.</p>
             <textarea id="importCode" class="hub-field" readonly></textarea>
+            <button id="openPracticeBtn" class="btn-success"><i class="fas fa-arrow-right"></i> Open in Practice</button>
             <button id="copyBtn" class="btn-primary"><i class="fas fa-copy"></i> Copy code</button>
             <div id="importMsg" class="hub-msg"></div>
         </div>
@@ -231,6 +232,20 @@
             document.querySelectorAll('.hub-subtab').forEach(x => x.classList.toggle('active', x === b));
             renderActiveTab();
         }));
+        // Hand the imported strategy to the Practice page (index.html reads and clears this key on
+        // load and puts it in a new 1v1 editor box). sessionStorage can be unavailable (private
+        // mode, blocked storage), so fall back to copying the code.
+        document.getElementById('openPracticeBtn').addEventListener('click', () => {
+            const name = document.getElementById('importName').textContent;
+            const code = document.getElementById('importCode').value;
+            try {
+                sessionStorage.setItem('ipd_practice_import', JSON.stringify({ name, code }));
+            } catch (e) {
+                showMsg('Could not pass the strategy to Practice in this browser — use "Copy code" instead.', false, 'importMsg');
+                return;
+            }
+            window.location.href = '/';
+        });
         document.getElementById('copyBtn').addEventListener('click', () => {
             const ta = document.getElementById('importCode');
             ta.select();

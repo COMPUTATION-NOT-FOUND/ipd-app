@@ -180,19 +180,19 @@
             <div style="margin-bottom: 20px;">
                 <label style="display: block; margin-bottom: 10px; font-weight: bold;">Game Modes:</label>
                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px;">
-                    <div><input type="checkbox" id="mode_standard" checked> <label for="mode_standard">Standard</label></div>
-                    <div><input type="checkbox" id="mode_discounted"> <label for="mode_discounted">Discounted</label></div>
-                    <div><input type="checkbox" id="mode_stochastic"> <label for="mode_stochastic">Stochastic</label></div>
-                    <div><input type="checkbox" id="mode_random"> <label for="mode_random">Random Ite.</label></div>
+                    <div class="check-row"><input type="checkbox" id="mode_standard" checked> <label for="mode_standard">Standard</label></div>
+                    <div class="check-row"><input type="checkbox" id="mode_discounted"> <label for="mode_discounted">Discounted</label></div>
+                    <div class="check-row"><input type="checkbox" id="mode_stochastic"> <label for="mode_stochastic">Stochastic</label></div>
+                    <div class="check-row"><input type="checkbox" id="mode_random"> <label for="mode_random">Random Ite.</label></div>
                 </div>
                 <div style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
                     <div>
                         <label>Discount Factor:</label>
-                        <input type="number" id="discount_factor" value="0.95" step="0.01" style="width: 80px;">
+                        <input type="number" id="discount_factor" value="0.95" step="0.01" style="width: 110px;">
                     </div>
                     <div>
                         <label>Stochastic Prob:</label>
-                        <input type="number" id="stochastic_prob" value="0.995" step="0.005" style="width: 80px;">
+                        <input type="number" id="stochastic_prob" value="0.995" step="0.005" style="width: 110px;">
                     </div>
                 </div>
             </div>
@@ -277,19 +277,19 @@
             <div style="margin-bottom: 20px;">
                 <label style="display: block; margin-bottom: 10px; font-weight: bold;">Game Modes:</label>
                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px;">
-                    <div><input type="checkbox" id="np_mode_standard" checked> <label for="np_mode_standard">Standard</label></div>
-                    <div><input type="checkbox" id="np_mode_discounted"> <label for="np_mode_discounted">Discounted</label></div>
-                    <div><input type="checkbox" id="np_mode_stochastic"> <label for="np_mode_stochastic">Stochastic</label></div>
-                    <div><input type="checkbox" id="np_mode_random"> <label for="np_mode_random">Random Ite.</label></div>
+                    <div class="check-row"><input type="checkbox" id="np_mode_standard" checked> <label for="np_mode_standard">Standard</label></div>
+                    <div class="check-row"><input type="checkbox" id="np_mode_discounted"> <label for="np_mode_discounted">Discounted</label></div>
+                    <div class="check-row"><input type="checkbox" id="np_mode_stochastic"> <label for="np_mode_stochastic">Stochastic</label></div>
+                    <div class="check-row"><input type="checkbox" id="np_mode_random"> <label for="np_mode_random">Random Ite.</label></div>
                 </div>
                 <div style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
                      <div>
                         <label>Discount Factor:</label>
-                        <input type="number" id="np_discount_factor" value="0.95" step="0.01" style="width: 80px;">
+                        <input type="number" id="np_discount_factor" value="0.95" step="0.01" style="width: 110px;">
                      </div>
                      <div>
                         <label>Stochastic Prob:</label>
-                        <input type="number" id="np_stochastic_prob" value="0.995" step="0.005" style="width: 80px;">
+                        <input type="number" id="np_stochastic_prob" value="0.995" step="0.005" style="width: 110px;">
                      </div>
                 </div>
             </div>
@@ -654,18 +654,54 @@
             if (content) content.classList.add('active');
         }
 
-        // Existing JS logic remains...
-        // Unified 4-arg signature — the same function runs in 1v1, N-Player and OS Simulation.
-        const examples = {
-            titfortat: `def STRATEGY_NAME(last_moves, my_history, opponents_histories, meta):
-    return last_moves[0] if last_moves else 'C'`,
-            random: `def STRATEGY_NAME(last_moves, my_history, opponents_histories, meta):
-    return 'C' if randint(0, 1) else 'D'`,
-            cooperate: `def STRATEGY_NAME(last_moves, my_history, opponents_histories, meta):
-    return 'C'`,
-            defect: `def STRATEGY_NAME(last_moves, my_history, opponents_histories, meta):
-    return 'D'`
+        // Quick-fill presets, the same four on every tab. Unified 4-arg signature — the same
+        // function runs in 1v1, N-Player and OS Simulation.
+        const PRESETS = {
+            titfortat: { title: 'Tit-for-Tat',      label: 'tit_for_tat',      body: "return last_moves[0] if last_moves else 'C'" },
+            random:    { title: 'Random',           label: 'random',           body: "return 'C' if randint(0, 1) else 'D'" },
+            cooperate: { title: 'Always Cooperate', label: 'always_cooperate', body: "return 'C'" },
+            defect:    { title: 'Always Defect',    label: 'always_defect',    body: "return 'D'" },
         };
+
+        // The strategy name is a free-text display label (e.g. "Grim Trigger"), so derive a valid
+        // Python function name from it for generated code.
+        function toFunctionName(name) {
+            let id = String(name || '').trim().replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+            if (!id) id = 'strategy';
+            if (/^[0-9]/.test(id)) id = 's_' + id;
+            return id;
+        }
+
+        // Fill editor box `id` on a tab (`prefix` = 'strategy' | 'npStrategy' | 'osStrategy') with a
+        // preset. While the name is still the untouched default it is renamed after the preset
+        // too (e.g. "tit_for_tat_1"), so the name and the code never disagree.
+        function applyPreset(prefix, id, type) {
+            const p = PRESETS[type];
+            const nameEl = document.getElementById(`${prefix}Name${id}`);
+            const codeEl = document.getElementById(`${prefix}Code${id}`);
+            if (!p || !nameEl || !codeEl) return;
+            if (nameEl.dataset.auto === '1' || !nameEl.value.trim()) {
+                nameEl.value = `${p.label}_${id}`;
+                nameEl.dataset.auto = '1';
+            }
+            codeEl.value = `def ${toFunctionName(nameEl.value)}(last_moves, my_history, opponents_histories, meta):\n    ${p.body}`;
+        }
+
+        // Once the user types a name, presets stop renaming the box.
+        function markNameEdited(el) { if (el) el.dataset.auto = '0'; }
+
+        // Name field + quick-fill buttons for one editor box (shared by all three tabs).
+        function nameFieldHtml(prefix, id, defaultName) {
+            return `<label>Strategy name <small style="font-weight: normal;">(a display label; must be unique in a run)</small>
+                    <input type="text" id="${prefix}Name${id}" value="${defaultName}" data-auto="1"
+                           data-action="markNameEdited" data-on="input" data-pass-this>
+                </label>`;
+        }
+        function presetButtonsHtml(prefix, id) {
+            return Object.entries(PRESETS).map(([key, p]) =>
+                `<button data-action="applyPreset" data-arg="${prefix}" data-arg2="${id}" data-arg3="${key}" class="btn btn-secondary" style="padding: 5px 10px; font-size: 12px !important;">${p.title}</button>`
+            ).join('\n');
+        }
         // ... (keeping the rest of the JS logic identical but just updating style strings in JS) ...
         
         // Helper to update styles in JS generated content
@@ -706,30 +742,23 @@
 
             strategyDiv.innerHTML = `
                 <h3>Strategy ${strategyCount}</h3>
-                <label>Function Name:
-                    <input type="text" id="strategyName${strategyCount}" value="house_bot_${strategyCount}" data-action="updateExamples" data-arg="${strategyCount}" data-on="change">
-                </label>
-                <br><br>
+                ${nameFieldHtml('strategy', strategyCount, `my_strategy_${strategyCount}`)}
+                <br>
                 <textarea id="strategyCode${strategyCount}"></textarea>
-                <div id="examples${strategyCount}" class="examples"></div>
                 <div style="margin-top: 10px;">
-                    <button data-action="loadExample" data-arg="${strategyCount}" data-arg2="titfortat" class="btn btn-secondary" style="padding: 5px 10px; font-size: 12px !important;">Tit-for-Tat</button>
-                    <button data-action="loadExample" data-arg="${strategyCount}" data-arg2="random" class="btn btn-secondary" style="padding: 5px 10px; font-size: 12px !important;">Random</button>
-                    <button data-action="loadExample" data-arg="${strategyCount}" data-arg2="cooperate" class="btn btn-secondary" style="padding: 5px 10px; font-size: 12px !important;">Always Cooperate</button>
-                    <button data-action="loadExample" data-arg="${strategyCount}" data-arg2="defect" class="btn btn-secondary" style="padding: 5px 10px; font-size: 12px !important;">Always Defect</button>
+                    ${presetButtonsHtml('strategy', strategyCount)}
                 </div>
                 <div style="margin-top: 10px; text-align: center;">
                     <button data-action="saveStrategyLocal" data-arg="${strategyCount}" style="background: var(--success-color); color: var(--color-paper); padding: 8px 16px; font-size: 12px;">
                         <i class="fas fa-save"></i> Save locally
                     </button>
-                    <button data-action="addStrategyToWebsite" data-arg="${strategyCount}" title="Admin: publish this strategy to the shared class website" style="display:${isAdmin ? 'inline-block' : 'none'}; background: var(--primary-color); color: var(--color-paper); padding: 8px 16px; font-size: 12px; margin-left:6px;">
-                        <i class="fas fa-cloud-arrow-up"></i> Add to website gallery
+                    <button data-action="addStrategyToWebsite" data-arg="${strategyCount}" title="For instructors: add this strategy to the shared class website gallery (you log in on the website to confirm). Students don't need this." style="display:${isAdmin ? 'inline-block' : 'none'}; background: var(--primary-color); color: var(--color-paper); padding: 8px 16px; font-size: 12px; margin-left:6px;">
+                        <i class="fas fa-cloud-arrow-up"></i> Add to website gallery (instructors only)
                     </button>
                 </div>
             `;
-            
+
             container.appendChild(strategyDiv);
-            updateExamples(strategyCount);
         }
 
         function removeLastStrategy() {
@@ -743,21 +772,11 @@
             }
         }
 
-        function loadExample(strategyId, exampleType) {
-            const functionName = document.getElementById(`strategyName${strategyId}`).value;
-            const code = examples[exampleType].replace('STRATEGY_NAME', functionName);
-            document.getElementById(`strategyCode${strategyId}`).value = code;
-        }
-
-        function updateExamples(strategyId) {
-            // cleared
-        }
-
         function loadDefaultStrategies() {
             addStrategy();
-            loadExample(1, 'titfortat');
+            applyPreset('strategy', 1, 'titfortat');
             addStrategy();
-            loadExample(2, 'random');
+            applyPreset('strategy', 2, 'random');
         }
         
         // ... (rest of functions remain mostly same logic, just minor style tweaks in innerHTML) ...
@@ -894,8 +913,10 @@
             // Per-mode element ids so the 1v1 / N-Player / OS-sim panels don't collide.
             el.innerHTML = `
               <div class="results" style="border:1px solid var(--info-color); margin-top:20px; background: var(--bg-card);">
-                <h3><i class="fas fa-cloud-arrow-up"></i> Submit results to website (admin)</h3>
-                <p>Publishes this tournament to the website. ${locals} local player(s) will be saved there
+                <h3><i class="fas fa-cloud-arrow-up"></i> Submit results to website (instructors only)</h3>
+                <p style="color: var(--text-secondary);"><i class="fas fa-circle-info"></i> Students: you don't
+                need this. It publishes an official result and only works with the instructor's website login.</p>
+                <p>Publishes this tournament to the website. ${plural(locals, 'local player')} will be saved there
                 as bots (player submissions and practice strategies are not re-registered). You'll log in
                 on the website and choose post-now or schedule.</p>
                 ${flagNote}
@@ -1229,6 +1250,18 @@
             try { const r = await fetch('/local-gallery/list'); const d = await r.json(); LOCAL_STRATS = d.strategies || []; }
             catch(e) { LOCAL_STRATS = []; }
         }
+        async function deleteLocalStrategy(id, name) {
+            if (!confirm(`Delete the saved strategy "${name}" from this computer?`)) return;
+            try {
+                const res = await fetch('/local-gallery/delete', { method: 'POST',
+                    headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ id }) });
+                const d = await res.json();
+                if (!res.ok) throw new Error(d.error || 'Delete failed');
+                await loadLocalGallery();
+                rerenderAllChecklists();
+            } catch (e) { alert(e.message); }
+        }
+
         function rerenderAllChecklists() {
             renderParticipantChecklist('1v1', 'galleryContainer', 'galleryStatus');
             renderParticipantChecklist('nplayer', 'npGalleryContainer', 'npGalleryStatus');
@@ -1268,11 +1301,17 @@
                 const flag = s.flagged
                     ? ` <i class="fas fa-flag" style="color:var(--warning-color);" title="Flagged by an admin${s.flag_reason ? ' (' + galleryEscape(s.flag_reason) + ')' : ''}"></i>`
                     : '';
+                // Saved-locally entries can be removed (they otherwise pile up with every save).
+                const del = p === 'local'
+                    ? `<button type="button" data-action="deleteLocalStrategy" data-arg="${galleryEscape(s.id)}" data-arg2="${galleryEscape(s.name)}"
+                               title="Delete this saved strategy from this computer"
+                               style="padding: 0 7px; font-size: 12px; background: transparent; color: var(--danger-color); border: 1px solid var(--danger-color);">&times;</button>`
+                    : '';
                 return `<div class="part-row">
                     <input type="checkbox" class="part-check-${target}" data-section="${isBot ? 'bot' : p}"
                            data-pool="${p}" data-idx="${idx}" data-type="${isBot ? 'bot' : 'tournament'}"
                            id="chk_${target}_${p}_${idx}">
-                    <label for="chk_${target}_${p}_${idx}" title="${galleryEscape(s.name)}">${galleryEscape(s.name)} <small>(${tag})</small>${flag}</label>${count}
+                    <label for="chk_${target}_${p}_${idx}" title="${galleryEscape(s.name)}">${galleryEscape(s.name)} <small>(${tag})</small>${flag}</label>${count}${del}
                 </div>`;
             }
             // Each section is its own card column with its OWN Toggle All (scoped via data-section).
@@ -1407,19 +1446,39 @@
             checkAuthStatus();
             // Init N-Player
             addNpStrategy();
-            loadNpExample(1, 'cooperate');
+            applyPreset('npStrategy', 1, 'cooperate');
             addNpStrategy();
-            loadNpExample(2, 'defect');
+            applyPreset('npStrategy', 2, 'defect');
             toggleNPlayerPayoffFieldsPractice();
             toggleNPlayerAlphaFieldPractice();
             loadGallery('nplayer', 'npGalleryContainer', 'npGalleryStatus');
             // Init OS Simulation practice
             addOsStrategy();
-            loadOsExample(1, 'titfortat');
+            applyPreset('osStrategy', 1, 'titfortat');
             addOsStrategy();
-            loadOsExample(2, 'defect');
+            applyPreset('osStrategy', 2, 'defect');
             loadGallery('os', 'osGalleryContainer', 'osGalleryStatus');
+            openImportedStrategy();
         };
+
+        // A strategy sent from the Hub page's "Open in Practice" button arrives in sessionStorage;
+        // put it in a new 1v1 editor box and show it. Read once, then cleared.
+        function openImportedStrategy() {
+            let imported = null;
+            try {
+                imported = JSON.parse(sessionStorage.getItem('ipd_practice_import') || 'null');
+                sessionStorage.removeItem('ipd_practice_import');
+            } catch (e) { imported = null; }
+            if (!imported || typeof imported.code !== 'string' || !imported.code.trim()) return;
+            switchPracticeTab('practice1v1');
+            addStrategy();
+            const id = strategyCount;
+            const nameEl = document.getElementById(`strategyName${id}`);
+            nameEl.value = String(imported.name || `imported_${id}`);
+            nameEl.dataset.auto = '0';
+            document.getElementById(`strategyCode${id}`).value = imported.code;
+            document.getElementById(`strategy${id}`).scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
 
         /* N-Player Practice Logic */
         const MAX_NP_STRATEGIES = effectiveMaxNplayer;  // vestigial: nothing reads this to cap a run
@@ -1452,15 +1511,11 @@
             div.id = `npStrategy${id}`;
             div.innerHTML = `
                 <h3>NP Strategy ${id}</h3>
-                <label>Function Name:
-                    <input type="text" id="npStrategyName${id}" value="np_strat_${id}" data-action="loadNpExample" data-arg="${id}" data-arg2="temp" data-on="change">
-                </label>
-                <br><br>
+                ${nameFieldHtml('npStrategy', id, `my_np_strategy_${id}`)}
+                <br>
                 <textarea id="npStrategyCode${id}"></textarea>
                 <div style="margin-top: 10px;">
-                     <button data-action="loadNpExample" data-arg="${id}" data-arg2="cooperate" style="background: var(--primary-color); color: var(--color-paper); padding: 5px 10px; font-size: 12px;">Always Cooperate</button>
-                     <button data-action="loadNpExample" data-arg="${id}" data-arg2="defect" style="background: var(--primary-color); color: var(--color-paper); padding: 5px 10px; font-size: 12px;">Always Defect</button>
-                     <button data-action="loadNpExample" data-arg="${id}" data-arg2="random" style="background: var(--primary-color); color: var(--color-paper); padding: 5px 10px; font-size: 12px;">Random</button>
+                    ${presetButtonsHtml('npStrategy', id)}
                 </div>
             `;
             document.getElementById('npStrategiesContainer').appendChild(div);
@@ -1472,17 +1527,6 @@
                 npStrategyCount--;
                  document.getElementById('npStrategyCountDisplay').textContent = npStrategyCount;
             }
-        }
-
-        function loadNpExample(id, type) {
-            const nameEl = document.getElementById(`npStrategyName${id}`);
-            if (type === 'temp') return; 
-            const name = nameEl.value;
-            let code = "";
-            if (type === 'cooperate') code = `def ${name}(last_moves, my_history, opponents_histories, meta):\n    return 'C'`;
-            if (type === 'defect') code = `def ${name}(last_moves, my_history, opponents_histories, meta):\n    return 'D'`;
-            if (type === 'random') code = `def ${name}(last_moves, my_history, opponents_histories, meta):\n    return 'C' if randint(0, 1) else 'D'`;
-            document.getElementById(`npStrategyCode${id}`).value = code;
         }
 
         async function startNPlayerTournament() {
@@ -1737,15 +1781,11 @@
             div.id = `osStrategy${id}`;
             div.innerHTML = `
                 <h3>OS Strategy ${id}</h3>
-                <label>Function Name:
-                    <input type="text" id="osStrategyName${id}" value="os_strat_${id}">
-                </label>
-                <br><br>
+                ${nameFieldHtml('osStrategy', id, `my_os_strategy_${id}`)}
+                <br>
                 <textarea id="osStrategyCode${id}"></textarea>
                 <div style="margin-top: 10px;">
-                    <button data-action="loadOsExample" data-arg="${id}" data-arg2="cooperate" style="background: var(--primary-color); color: var(--color-paper); padding: 5px 10px; font-size: 12px;">Always Cooperate</button>
-                    <button data-action="loadOsExample" data-arg="${id}" data-arg2="defect" style="background: var(--primary-color); color: var(--color-paper); padding: 5px 10px; font-size: 12px;">Always Defect</button>
-                    <button data-action="loadOsExample" data-arg="${id}" data-arg2="titfortat" style="background: var(--primary-color); color: var(--color-paper); padding: 5px 10px; font-size: 12px;">Tit-for-Tat</button>
+                    ${presetButtonsHtml('osStrategy', id)}
                 </div>
             `;
             document.getElementById('osStrategiesContainer').appendChild(div);
@@ -1759,16 +1799,6 @@
                 osStrategyCount--;
                 document.getElementById('osStrategyCountDisplay').textContent = osStrategyCount;
             }
-        }
-
-        function loadOsExample(id, type) {
-            const name = document.getElementById(`osStrategyName${id}`).value;
-            let code = '';
-            // Unified 4-arg signature works in the OS simulation too.
-            if (type === 'cooperate') code = `def ${name}(last_moves, my_history, opponents_histories, meta):\n    return 'C'`;
-            if (type === 'defect') code = `def ${name}(last_moves, my_history, opponents_histories, meta):\n    return 'D'`;
-            if (type === 'titfortat') code = `def ${name}(last_moves, my_history, opponents_histories, meta):\n    return last_moves[0] if last_moves else 'C'`;
-            document.getElementById(`osStrategyCode${id}`).value = code;
         }
 
         async function startOSSimulation() {

@@ -282,6 +282,17 @@ input[type='checkbox'], input[type='radio'], input[type='range'] {
     accent-color: var(--color-signal);
 }
 
+/* The 100% width above is for text fields. A checkbox or radio stretched to fill its column
+   pushes its label onto the next line (the misaligned "Game Modes" boxes). */
+input[type='checkbox'], input[type='radio'] {
+    width: auto;
+}
+
+/* A checkbox and its label on one line. */
+.check-row { display: flex; align-items: center; gap: 8px; }
+.check-row input, .check-row label { margin: 0; }
+.check-row label { display: inline; }
+
 label {
     display: block;
     margin-bottom: 8px;
