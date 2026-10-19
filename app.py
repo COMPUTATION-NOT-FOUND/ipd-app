@@ -873,7 +873,10 @@ def game(player_a_code, player_a_name, player_b_code, player_b_name, rounds=200,
     
     # Create RNG instance if seed provided, else None (use module random)
     rng = random.Random(seed) if seed is not None else None
-    
+    # The generator strategies get as meta['rng']. It must always exist: strategies are told to use
+    # it for randomness, and with no seed it used to be None, so they crashed and forfeited.
+    strategy_rng = rng if rng is not None else random.Random()
+
     # Constants for modes (now configurable)
     DISCOUNT_FACTOR = float(discount_factor)
     STOCHASTIC_PROB = float(stochastic_prob)
@@ -1064,7 +1067,7 @@ def game(player_a_code, player_a_name, player_b_code, player_b_name, rounds=200,
         # 'D' (validate_move); any failure ends the match with that player named as the culprit.
         def _play(func, player, last_moves, own_history, opp_history, player_index):
             meta = {'round': current_round, 'n_players': 2, 'player_index': player_index,
-                    'tournament_info': tournament_info, 'rng': rng}
+                    'tournament_info': tournament_info, 'rng': strategy_rng}
             try:
                 move = validate_move(run_with_limit(call_strategy, func, last_moves, own_history.copy(),
                                                     [opp_history.copy()], meta, limit=MAX_STRATEGY_INSTRUCTIONS))
