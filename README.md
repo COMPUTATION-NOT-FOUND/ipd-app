@@ -247,7 +247,7 @@ submission, results, all the secrets). This app has **no Firebase and no keys** 
   with `pip install -r requirements-build.txt` then `python build_exe.py` (→ `dist/`; builds for the
   OS you run it on). To publish all three downloads, push a version tag —
   `git tag v1.0.0 && git push origin v1.0.0` — and `.github/workflows/build-app.yml` runs the tests,
-  builds Windows/macOS/Linux, and attaches them with `env.example` to a GitHub Release. The `.env`
+  builds Windows/macOS/Linux, and attaches them to a GitHub Release. The `.env`
   is never bundled (anything inside an exe can be unpacked, and the class token must stay private).
 
 > **Scoring:** `Score = (win_rate·W_win + cooperation·W_coop + points·W_points) × 100`, where

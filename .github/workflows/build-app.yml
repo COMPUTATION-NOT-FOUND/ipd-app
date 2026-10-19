@@ -1,7 +1,7 @@
 # Builds the double-click app (build_exe.py / PyInstaller) on Windows, macOS and Linux.
 #
 # - Push a version tag (e.g. `git tag v1.0.0 && git push origin v1.0.0`) to build all three and
-#   attach them, plus env.example (the settings template), to a GitHub Release.
+#   attach them to a GitHub Release that students download from.
 # - Or run it by hand from the Actions tab ("Run workflow") to get the files as build artifacts.
 name: Build app
 
@@ -45,13 +45,11 @@ jobs:
         run: python -m pip install -r requirements-dev.txt && python -m pytest -q
       - name: Build
         run: python build_exe.py
-      # The settings template is published as env.example (no leading dot: GitHub renames
-      # dot-files on release uploads) and only by one job, so the three jobs don't race on it.
+      # Only the app itself is published: students connect to the class website from the app's
+      # Settings tab, so no settings template is needed (.env.example stays in the repo).
       - name: Name the file for this OS
         shell: bash
-        run: |
-          mkdir -p out && cp "${{ matrix.built }}" "out/${{ matrix.asset }}"
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then cp .env.example out/env.example; fi
+        run: mkdir -p out && cp "${{ matrix.built }}" "out/${{ matrix.asset }}"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
@@ -60,7 +58,4 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            out/${{ matrix.asset }}
-            out/env.example
-          fail_on_unmatched_files: false
+          files: out/${{ matrix.asset }}
