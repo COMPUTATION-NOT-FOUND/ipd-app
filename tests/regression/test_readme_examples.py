@@ -20,10 +20,23 @@ README = os.path.join(os.path.dirname(__file__), '..', '..', 'README.md')
 TFT = "def tft(last_moves, my_history, opponents_histories, meta):\n    return last_moves[0] if last_moves else 'C'"
 
 
+GUIDE = os.path.join(os.path.dirname(__file__), '..', '..', 'docs', 'guide', 'student-guide.html')
+
+
 def _examples():
+    """Strategy examples from the README and from the student guide PDF's source."""
+    import html
     text = open(README, encoding='utf-8').read()
     blocks = re.findall(r"```python\n(.*?)```", text, re.S)
-    return [b for b in blocks if b.lstrip().startswith('def ')]
+    guide = open(GUIDE, encoding='utf-8').read()
+    blocks += [html.unescape(b) + '\n' for b in
+               re.findall(r'<pre><code class="python">(.*?)</code></pre>', guide, re.S)]
+    seen, out = set(), []
+    for b in blocks:
+        if b.lstrip().startswith('def ') and b not in seen:
+            seen.add(b)
+            out.append(b)
+    return out
 
 
 EXAMPLES = _examples()

@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Prisoner's Dilemma Practice App, Student Guide</title>
+<style>
+  @page { size: A4; margin: 18mm 18mm 20mm 18mm; }
+  body { font-family: "Segoe UI", Arial, sans-serif; font-size: 10.5pt; line-height: 1.5; color: #1d232a; }
+  h1 { font-size: 22pt; margin: 0 0 4pt; color: #0f5f5a; }
+  .sub { color: #5b6470; margin: 0 0 18pt; font-size: 11pt; }
+  h2 { font-size: 14pt; color: #0f5f5a; margin: 20pt 0 6pt; border-bottom: 1.5pt solid #cfe5e2; padding-bottom: 3pt; }
+  h3 { font-size: 11.5pt; margin: 12pt 0 4pt; }
+  p { margin: 0 0 7pt; }
+  ol, ul { margin: 0 0 8pt 16pt; padding: 0; }
+  li { margin-bottom: 3pt; }
+  pre { background: #f3f6f8; border: 1pt solid #dde4ea; border-radius: 4pt; padding: 7pt 9pt;
+        font-family: Consolas, "Courier New", monospace; font-size: 9pt; line-height: 1.4;
+        white-space: pre-wrap; margin: 4pt 0 9pt; page-break-inside: avoid; }
+  code { font-family: Consolas, "Courier New", monospace; font-size: 9.5pt; background: #f3f6f8; padding: 0 2pt; border-radius: 2pt; }
+  pre code { background: none; padding: 0; font-size: 9pt; }
+  table { border-collapse: collapse; width: 100%; margin: 4pt 0 10pt; font-size: 10pt; }
+  td, th { border: 1pt solid #dde4ea; padding: 4pt 6pt; text-align: left; vertical-align: top; }
+  th { background: #eef5f4; }
+  .note { background: #fff8e6; border-left: 3pt solid #e0a800; padding: 6pt 9pt; margin: 6pt 0 10pt; }
+  .keep { page-break-inside: avoid; }
+  h2, h3 { page-break-after: avoid; break-after: avoid; }
+  .ex { page-break-inside: avoid; break-inside: avoid; }
+</style>
+</head>
+<body>
+
+<h1>Prisoner's Dilemma Practice App</h1>
+<p class="sub">A short guide for students. Write a strategy, practise it, and enter the class tournament.</p>
+
+<h2>1. Get the app</h2>
+<ol>
+  <li>Download the file for your computer from the Releases page of the ipd-app repository. That is <code>ipd-app-windows.exe</code>, <code>ipd-app-macos</code> or <code>ipd-app-linux</code>.</li>
+  <li>Double click it. Your browser opens at <code>http://127.0.0.1:5000</code>. Keep the black window open while you work. Close it to stop.</li>
+  <li>Open the Settings tab, type the website address and class token your instructor gave you, and press Connect. You only do this once.</li>
+</ol>
+<div class="note">Windows may say "Windows protected your PC". Click More info, then Run anyway. On a Mac, see the README for the one line you need to run the first time.</div>
+
+<h2>2. Your first strategy</h2>
+<p>A strategy is a Python function. The app calls it every round and it returns <code>'C'</code> to cooperate or <code>'D'</code> to defect. This one is Tit-for-Tat. It cooperates first and then copies the opponent.</p>
+<pre><code class="python">def tit_for_tat(last_moves, my_history, opponents_histories, meta):
+    if not last_moves:
+        return 'C'
+    return last_moves[0]</code></pre>
+
+<table class="keep">
+  <tr><th>Input</th><th>What it holds</th></tr>
+  <tr><td><code>last_moves</code></td><td>Each opponent's move from the last round, such as <code>['C']</code>. Empty in the first round.</td></tr>
+  <tr><td><code>my_history</code></td><td>Every move you have made so far.</td></tr>
+  <tr><td><code>opponents_histories</code></td><td>One list of moves for each opponent.</td></tr>
+  <tr><td><code>meta</code></td><td>Extra information about the game. See the next section.</td></tr>
+</table>
+
+<h3>Rules to remember</h3>
+<ul>
+  <li>Always return exactly <code>'C'</code> or <code>'D'</code>. Anything else, a crash or an endless loop loses you the match.</li>
+  <li>The name you type in the app is only a label. It must be unique, and it does not need to match your function name.</li>
+  <li>Files, the network, <code>exec</code>, <code>eval</code> and <code>open</code> are blocked.</li>
+</ul>
+
+<h2>3. Using meta</h2>
+<p><code>meta</code> is a dictionary with five things in it. Each example below is a complete strategy that works in all three games.</p>
+
+<div class="ex"><h3>meta['round']</h3>
+<p>The round number, starting at 0.</p>
+<pre><code class="python">def slow_start(last_moves, my_history, opponents_histories, meta):
+    # Be friendly for the first 5 rounds, then copy the opponent.
+    if meta['round'] &lt; 5:
+        return 'C'
+    return last_moves[0]</code></pre></div>
+
+<div class="ex"><h3>meta['rng']</h3>
+<p>A random number generator. Use it instead of <code>import random</code>, so a run with a seed can be repeated exactly.</p>
+<pre><code class="python">def generous_tit_for_tat(last_moves, my_history, opponents_histories, meta):
+    # Like Tit-for-Tat, but forgive a defection about 1 time in 10.
+    if not last_moves or last_moves[0] == 'C':
+        return 'C'
+    if meta['rng'].random() &lt; 0.1:
+        return 'C'
+    return 'D'</code></pre></div>
+
+<div class="ex"><h3>meta['n_players']</h3>
+<p>How many players are in the game, counting you. It is 2 in 1v1, the group size in N-Player and the number of cores in the OS Simulation.</p>
+<pre><code class="python">def careful_in_crowds(last_moves, my_history, opponents_histories, meta):
+    # In a big group, only cooperate if nobody defected last round.
+    if not last_moves:
+        return 'C'
+    if meta['n_players'] &gt; 2:
+        return 'C' if 'D' not in last_moves else 'D'
+    return last_moves[0]</code></pre></div>
+
+<div class="ex"><h3>meta['player_index']</h3>
+<p>Your seat in the game, starting at 0. You will rarely need it.</p>
+<pre><code class="python">def seat_based_start(last_moves, my_history, opponents_histories, meta):
+    if not last_moves:
+        return 'C' if meta['player_index'] % 2 == 0 else 'D'
+    return last_moves[0]</code></pre></div>
+
+<div class="ex"><h3>meta['tournament_info']</h3>
+<p>Information about the game you are in. Its <code>format</code> is <code>'2-player'</code> in 1v1, <code>'n_player'</code> in N-Player and <code>'os_simulation'</code> in the OS Simulation.</p>
+<pre><code class="python">def adapts_to_the_game(last_moves, my_history, opponents_histories, meta):
+    game = meta['tournament_info'].get('format')
+    if not last_moves:
+        return 'C'
+    if game == 'os_simulation':
+        # last_moves[0] is 'D' when the computer is busy. Give way when it is busy.
+        return 'C' if last_moves[0] == 'D' else 'D'
+    if game == 'n_player':
+        return 'C' if last_moves.count('C') * 2 &gt;= len(last_moves) else 'D'
+    return last_moves[0]</code></pre></div>
+
+<h2>4. The three games</h2>
+<h3>1v1</h3>
+<p>Every strategy plays every other strategy, one pair at a time. You are ranked by a weighted score made of win rate, cooperation and points. Move the sliders to decide how much each part counts.</p>
+<h3>N-Player</h3>
+<p>Everyone plays in one group and moves at the same time. <code>last_moves</code> then has one move for each other player. Choose how the group is paid, for example Public Goods, where cooperators pay into a pot that is multiplied and shared.</p>
+<h3>OS Simulation</h3>
+<p>Your strategy becomes a CPU scheduler. Cooperating means giving up the CPU and defecting means keeping it. <code>last_moves[0]</code> tells you whether the computer is busy (<code>'D'</code>) or calm (<code>'C'</code>). Each strategy is run 10 times on different task sets and averaged. The plus or minus range next to each number shows how sure the result is. If two ranges overlap, neither strategy is clearly better.</p>
+
+<h2>5. Practise against the class</h2>
+<ul>
+  <li>Press Refresh Gallery to fetch your classmates' strategies. Tick the ones you want to face.</li>
+  <li>Press Save locally to keep a strategy on your computer.</li>
+  <li>On the Hub tab, import a classmate's strategy and press Open in Practice to load it into an editor.</li>
+  <li>Tick Run in sandbox mode to test strategies you did not write in a safe, separate process first.</li>
+</ul>
+
+<h2>6. Submit</h2>
+<ol>
+  <li>Open the Hub tab and paste your strategy under Submit your strategy to the website.</li>
+  <li>Press the button. The app checks and test plays your strategy first and tells you about any problem.</li>
+  <li>The class website opens with your strategy filled in. Log in and press Submit. You can update it any time before the tournament.</li>
+</ol>
+
+<h2>7. Common mistakes</h2>
+<ul>
+  <li>A branch of your code that never returns. The function then returns <code>None</code> and fails.</li>
+  <li>Reading <code>last_moves[0]</code> in the first round, when the list is still empty. Check <code>if not last_moves:</code> first.</li>
+  <li>Using <code>random.random()</code>. Use <code>meta['rng']</code> instead so results can be repeated.</li>
+  <li>Two entries with the same name in one run. Rename one of them.</li>
+</ul>
+<p>Good luck, and have fun.</p>
+
+</body>
+</html>

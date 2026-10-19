@@ -45,11 +45,14 @@ jobs:
         run: python -m pip install -r requirements-dev.txt && python -m pytest -q
       - name: Build
         run: python build_exe.py
-      # Only the app itself is published: students connect to the class website from the app's
-      # Settings tab, so no settings template is needed (.env.example stays in the repo).
+      # Published: the app for each OS, plus the student guide PDF (from the Windows job only, so
+      # the three jobs don't race on it). Students connect to the class website in the app's
+      # Settings tab, so no settings template is published (.env.example stays in the repo).
       - name: Name the file for this OS
         shell: bash
-        run: mkdir -p out && cp "${{ matrix.built }}" "out/${{ matrix.asset }}"
+        run: |
+          mkdir -p out && cp "${{ matrix.built }}" "out/${{ matrix.asset }}"
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then cp docs/student-guide.pdf out/; fi
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
@@ -58,4 +61,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: out/${{ matrix.asset }}
+          files: |
+            out/${{ matrix.asset }}
+            out/student-guide.pdf
+          fail_on_unmatched_files: false
