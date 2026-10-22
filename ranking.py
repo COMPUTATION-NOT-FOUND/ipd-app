@@ -3,12 +3,17 @@
 A ranking spec looks like this (stored on every result, so the website shows the same order):
 
     {"metric": "total_points", "direction": "desc",
-     "tiebreak": ["wins", "cooperation_percentage", "earliest_submission"],
-     "shared_rank": False}
+     "tiebreak": ["cooperation_percentage", "win_rate", "earliest_submission"],
+     "shared_rank": False,
+     "weights": {"points": 1.0, "cooperation": 0.0, "win_rate": 0.0}}
 
 Entries are sorted by ``metric``; when two are equal, each ``tiebreak`` metric is tried in turn
 (each in its own natural direction); if everything is still equal the original order is kept.
 With ``shared_rank`` on, entries equal on the main metric share a place (1, =2, =2, 4).
+
+``weights`` (1v1 and N-Player only) set the weighted score: (win rate x W + cooperation x W +
+points x W) x 100, each part a fraction from 0 to 1. Ranking by ``weighted_score`` uses them;
+strategies can read them as meta['tournament_info']['weights'].
 
 The defaults follow the tournament itinerary: 1v1 and N-Player rank by highest total points, the
 OS simulation by lowest average response time.
@@ -24,6 +29,7 @@ TOLERANCE = 1e-9
 PD_METRICS = {
     'total_points': ('Total points', 'desc'),
     'wins': ('Wins', 'desc'),
+    'win_rate': ('Win rate', 'desc'),
     'losses': ('Losses', 'asc'),
     'cooperation_percentage': ('Cooperation %', 'desc'),
     'points_percentage': ('Points % of maximum', 'desc'),
@@ -42,13 +48,17 @@ OS_METRICS = {
 }
 METRICS = {'1v1': PD_METRICS, 'nplayer': PD_METRICS, 'os': OS_METRICS}
 
+# Weighted-score weights; the default is all points (Sprint 1).
+DEFAULT_WEIGHTS = {'points': 1.0, 'cooperation': 0.0, 'win_rate': 0.0}
+WEIGHT_LABELS = {'points': 'points', 'cooperation': 'cooperation', 'win_rate': 'win rate'}
+
 DEFAULT_RANKING = {
     '1v1': {'metric': 'total_points', 'direction': 'desc',
-            'tiebreak': ['wins', 'cooperation_percentage', 'earliest_submission'],
-            'shared_rank': False},
+            'tiebreak': ['cooperation_percentage', 'win_rate', 'earliest_submission'],
+            'shared_rank': False, 'weights': dict(DEFAULT_WEIGHTS)},
     'nplayer': {'metric': 'total_points', 'direction': 'desc',
-                'tiebreak': ['wins', 'cooperation_percentage', 'earliest_submission'],
-                'shared_rank': False},
+                'tiebreak': ['cooperation_percentage', 'win_rate', 'earliest_submission'],
+                'shared_rank': False, 'weights': dict(DEFAULT_WEIGHTS)},
     'os': {'metric': 'avg_response', 'direction': 'asc',
            'tiebreak': ['avg_waiting', 'throughput', 'earliest_submission'],
            'shared_rank': False},
@@ -77,8 +87,53 @@ def normalize_ranking(spec, mode):
     for t in tiebreak:
         if isinstance(t, str) and t in catalog and t != metric and t not in clean:
             clean.append(t)
-    return {'metric': metric, 'direction': direction, 'tiebreak': clean[:6],
-            'shared_rank': bool(spec.get('shared_rank', default['shared_rank']))}
+    out = {'metric': metric, 'direction': direction, 'tiebreak': clean[:6],
+           'shared_rank': bool(spec.get('shared_rank', default['shared_rank']))}
+    if mode != 'os':
+        out['weights'] = normalize_weights(spec.get('weights'))
+    return out
+
+
+def normalize_weights(weights):
+    """{points, cooperation, win_rate} as fractions adding up to 1 (percentages are accepted).
+    Anything unusable falls back to the default (all points)."""
+    if not isinstance(weights, dict):
+        return dict(DEFAULT_WEIGHTS)
+    vals = {}
+    for k in DEFAULT_WEIGHTS:
+        v = weights.get(k, 0)
+        vals[k] = float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else 0.0
+    total = sum(vals.values())
+    if total <= 0:
+        return dict(DEFAULT_WEIGHTS)
+    return {k: round(v / total, 6) for k, v in vals.items()}
+
+
+def describe_weights(weights):
+    """'points 60%, cooperation 20%, win rate 20%' (only the parts that count)."""
+    w = normalize_weights(weights)
+    parts = [f"{WEIGHT_LABELS[k]} {round(v * 100):g}%" for k, v in w.items() if v > 0]
+    return ', '.join(parts)
+
+
+def win_rate(entry):
+    games = sum(entry.get(k, 0) or 0 for k in ('wins', 'draws', 'losses'))
+    return (entry.get('wins', 0) or 0) / games if games > 0 else None
+
+
+def weighted_score(entry, weights):
+    """(win rate x W + cooperation x W + points x W) x 100, each part a fraction from 0 to 1.
+    Cooperation uses the mode-balanced percentage when there is one; points use the share of the
+    best possible points per round. Same formula as the browser (pd_results_render.js)."""
+    w = normalize_weights(weights)
+    wr = win_rate(entry) or 0.0
+    coop = entry.get('norm_cooperation_percentage')
+    if not isinstance(coop, (int, float)):
+        coop = entry.get('cooperation_percentage') or 0
+    pts = entry.get('points_percentage') or 0
+    clamp = lambda x: max(0.0, min(1.0, x))   # noqa: E731
+    return (clamp(wr) * w['win_rate'] + clamp(coop / 100) * w['cooperation']
+            + clamp(pts / 100) * w['points']) * 100
 
 
 def describe_ranking(spec, mode):
@@ -88,6 +143,8 @@ def describe_ranking(spec, mode):
     label = catalog[spec['metric']][0]
     first = 'lowest first' if spec['direction'] == 'asc' else 'highest first'
     text = f"Ranked by {label[0].lower() + label[1:]} ({first})."
+    if spec['metric'] == 'weighted_score' and spec.get('weights'):
+        text += f" Weights: {describe_weights(spec['weights'])}."
     if spec['shared_rank']:
         text += " Equal scores share a place."
     elif spec['tiebreak']:
@@ -125,6 +182,8 @@ def _compare(a, b, direction):
 def _default_get(entry, metric):
     if metric == 'earliest_submission':
         return entry.get('submitted_at')
+    if metric == 'win_rate' and 'win_rate' not in entry:
+        return win_rate(entry)
     return entry.get(metric)
 
 
@@ -134,6 +193,12 @@ def rank_entries(entries, spec, mode, get=None):
     spec = normalize_ranking(spec, mode)
     get = get or _default_get
     catalog = METRICS[mode]
+    if mode != 'os':
+        # The weighted score always follows this ranking's weights, so it can't go stale.
+        for e in entries:
+            if isinstance(e, dict) and ('wins' in e or 'points_percentage' in e):
+                e['weighted_score'] = weighted_score(e, spec['weights'])
+                e['win_rate'] = win_rate(e)
     chain = [(spec['metric'], spec['direction'])]
     if not spec['shared_rank']:
         chain += [(t, catalog[t][1]) for t in spec['tiebreak']]

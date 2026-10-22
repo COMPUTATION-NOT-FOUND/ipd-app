@@ -229,7 +229,7 @@ The app has three tabs, one for each game. In each one you add strategies, choos
 
 ### 1v1
 
-Every strategy plays every other strategy, one pair at a time. The leaderboard ranks them by total points, highest first. Ties go to more wins, then higher cooperation %, then whoever submitted first. Use the Ranking box above the table to rank by something else and press Apply.
+Every strategy plays every other strategy, one pair at a time. The leaderboard ranks them by total points, highest first. Ties go to higher cooperation %, then higher win rate, then whoever submitted first. Use the Ranking box above the table to rank by something else and press Apply.
 
 1. Open the 1v1 tab. Two example strategies are already filled in.
 2. Change their code or press Add Strategy to add your own.

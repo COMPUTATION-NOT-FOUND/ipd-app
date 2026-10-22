@@ -15,6 +15,7 @@ const RANK_TOLERANCE = 1e-9;
 const RANK_PD_METRICS = {
     total_points: ['Total points', 'desc'],
     wins: ['Wins', 'desc'],
+    win_rate: ['Win rate', 'desc'],
     losses: ['Losses', 'asc'],
     cooperation_percentage: ['Cooperation %', 'desc'],
     points_percentage: ['Points % of maximum', 'desc'],
@@ -33,11 +34,17 @@ const RANK_OS_METRICS = {
 };
 const RANK_METRICS = { '1v1': RANK_PD_METRICS, nplayer: RANK_PD_METRICS, os: RANK_OS_METRICS };
 
+// Weighted-score weights; the default is all points (Sprint 1).
+const RANK_DEFAULT_WEIGHTS = { points: 1.0, cooperation: 0.0, win_rate: 0.0 };
+const RANK_WEIGHT_LABELS = { points: 'points', cooperation: 'cooperation', win_rate: 'win rate' };
+
 const RANK_DEFAULTS = {
     '1v1': { metric: 'total_points', direction: 'desc',
-             tiebreak: ['wins', 'cooperation_percentage', 'earliest_submission'], shared_rank: false },
+             tiebreak: ['cooperation_percentage', 'win_rate', 'earliest_submission'], shared_rank: false,
+             weights: Object.assign({}, RANK_DEFAULT_WEIGHTS) },
     nplayer: { metric: 'total_points', direction: 'desc',
-               tiebreak: ['wins', 'cooperation_percentage', 'earliest_submission'], shared_rank: false },
+               tiebreak: ['cooperation_percentage', 'win_rate', 'earliest_submission'], shared_rank: false,
+               weights: Object.assign({}, RANK_DEFAULT_WEIGHTS) },
     os: { metric: 'avg_response', direction: 'asc',
           tiebreak: ['avg_waiting', 'throughput', 'earliest_submission'], shared_rank: false },
 };
@@ -64,7 +71,45 @@ function normalizeRanking(spec, mode) {
             && t !== metric && !clean.includes(t)) clean.push(t);
     });
     const shared = (spec.shared_rank === undefined) ? def.shared_rank : !!spec.shared_rank;
-    return { metric, direction, tiebreak: clean.slice(0, 6), shared_rank: shared };
+    const out = { metric, direction, tiebreak: clean.slice(0, 6), shared_rank: shared };
+    if (mode !== 'os') out.weights = normalizeWeights(spec.weights);
+    return out;
+}
+
+// {points, cooperation, win_rate} as fractions adding up to 1 (percentages are accepted).
+function normalizeWeights(w) {
+    if (!w || typeof w !== 'object') return Object.assign({}, RANK_DEFAULT_WEIGHTS);
+    const vals = {};
+    let total = 0;
+    Object.keys(RANK_DEFAULT_WEIGHTS).forEach(k => {
+        const v = w[k];
+        vals[k] = (typeof v === 'number' && isFinite(v) && v > 0) ? v : 0;
+        total += vals[k];
+    });
+    if (total <= 0) return Object.assign({}, RANK_DEFAULT_WEIGHTS);
+    Object.keys(vals).forEach(k => { vals[k] = Math.round(vals[k] / total * 1e6) / 1e6; });
+    return vals;
+}
+
+function describeWeights(w) {
+    w = normalizeWeights(w);
+    return Object.keys(w).filter(k => w[k] > 0)
+        .map(k => `${RANK_WEIGHT_LABELS[k]} ${Math.round(w[k] * 100)}%`).join(', ');
+}
+
+function rankWinRate(e) {
+    const games = (e.wins || 0) + (e.draws || 0) + (e.losses || 0);
+    return games > 0 ? (e.wins || 0) / games : null;
+}
+
+// (win rate x W + cooperation x W + points x W) x 100, the same formula as ranking.py.
+function rankWeightedScore(e, weights) {
+    const w = normalizeWeights(weights);
+    const clamp = x => Math.max(0, Math.min(1, x));
+    const coop = (typeof e.norm_cooperation_percentage === 'number') ? e.norm_cooperation_percentage
+        : (e.cooperation_percentage || 0);
+    return (clamp(rankWinRate(e) || 0) * w.win_rate + clamp(coop / 100) * w.cooperation
+            + clamp((e.points_percentage || 0) / 100) * w.points) * 100;
 }
 
 function rankLower(s) { return s.charAt(0).toLowerCase() + s.slice(1); }
@@ -72,13 +117,16 @@ function rankLower(s) { return s.charAt(0).toLowerCase() + s.slice(1); }
 function describeRanking(spec, mode) {
     const cat = RANK_METRICS[mode];
     let text = `Ranked by ${rankLower(cat[spec.metric][0])} (${spec.direction === 'asc' ? 'lowest' : 'highest'} first).`;
+    if (spec.metric === 'weighted_score' && spec.weights) text += ` Weights: ${describeWeights(spec.weights)}.`;
     if (spec.shared_rank) text += ' Equal scores share a place.';
     else if (spec.tiebreak.length) text += ' Ties: ' + spec.tiebreak.map(t => rankLower(cat[t][0])).join(', then ') + '.';
     return text;
 }
 
 function rankDefaultGet(e, metric) {
-    return metric === 'earliest_submission' ? e.submitted_at : e[metric];
+    if (metric === 'earliest_submission') return e.submitted_at;
+    if (metric === 'win_rate' && !('win_rate' in e)) return rankWinRate(e);
+    return e[metric];
 }
 
 function rankValue(e, metric, get) {
@@ -103,6 +151,15 @@ function rankEntries(entries, spec, mode, get) {
     spec = normalizeRanking(spec, mode);
     get = get || rankDefaultGet;
     const cat = RANK_METRICS[mode];
+    if (mode !== 'os') {
+        // The weighted score always follows this ranking's weights, so it can't go stale.
+        (entries || []).forEach(e => {
+            if (e && ('wins' in e || 'points_percentage' in e)) {
+                e.weighted_score = rankWeightedScore(e, spec.weights);
+                e.win_rate = rankWinRate(e);
+            }
+        });
+    }
     const chain = [[spec.metric, spec.direction]];
     if (!spec.shared_rank) spec.tiebreak.forEach(t => chain.push([t, cat[t][1]]));
     const keyed = (entries || []).map((e, i) => ({ i, e, v: chain.map(([m]) => rankValue(e, m, get)) }));
@@ -156,12 +213,18 @@ function rankingControlsHtml(mode, spec, prefix, action) {
             </select>
             <label><input type="checkbox" id="${prefix}_shared"${spec.shared_rank ? ' checked' : ''}> equal scores share a place</label>
         </div>
+        ${mode === 'os' ? '' : `<div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:8px;">
+            <span>Weighted score weights (used when ranking by weighted score):</span>
+            ${['points', 'cooperation', 'win_rate'].map(k => `<label>${rankEsc(RANK_WEIGHT_LABELS[k])}
+                <input type="number" min="0" max="100" step="5" id="${prefix}_w_${k}" value="${Math.round((spec.weights || {})[k] * 100)}"
+                       style="width:70px; padding:4px; display:inline-block;"> %</label>`).join('')}
+        </div>`}
         <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:8px;">
             <span>Ties broken by</span>${tbSelect(0)}<span>then</span>${tbSelect(1)}<span>then</span>${tbSelect(2)}
             <button type="button" data-action="${rankEsc(action)}" style="background: var(--primary-color); color: var(--color-paper);">
                 <i class="fas fa-sort-amount-down"></i> Apply</button>
             <button type="button" data-action="${rankEsc(action)}" data-arg="reset" style="background: var(--warning-color); color: var(--color-paper);">
-                <i class="fas fa-undo"></i> Itinerary default</button>
+                <i class="fas fa-undo"></i> Reset to default</button>
         </div>
         <p style="margin:8px 0 0; font-size:0.85em; color: var(--text-secondary);">If everything is still equal, the earlier entry stays ahead.</p>
     </div>`;
@@ -170,7 +233,13 @@ function rankingControlsHtml(mode, spec, prefix, action) {
 function readRankingControls(prefix, mode) {
     const val = id => { const el = document.getElementById(id); return el ? el.value : ''; };
     const shared = document.getElementById(`${prefix}_shared`);
+    const weights = {};
+    ['points', 'cooperation', 'win_rate'].forEach(k => {
+        const el = document.getElementById(`${prefix}_w_${k}`);
+        if (el) weights[k] = parseFloat(el.value) || 0;
+    });
     return normalizeRanking({
+        weights: Object.keys(weights).length ? weights : undefined,
         metric: val(`${prefix}_metric`),
         direction: val(`${prefix}_dir`),
         tiebreak: [val(`${prefix}_tb0`), val(`${prefix}_tb1`), val(`${prefix}_tb2`)].filter(Boolean),

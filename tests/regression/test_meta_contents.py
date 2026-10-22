@@ -14,7 +14,9 @@ PROBE = """def probe(last_moves, my_history, opponents_histories, meta):
     m = info['payoff_matrix']
     ok = (m['CC'] == [3, 3] and m['CD'] == [0, 5] and m['DC'] == [5, 0] and m['DD'] == [1, 1]
           and info['ranking']['metric'] == 'total_points' and info['mode'] == 'standard'
-          and info['format'] == '2-player' and info['rounds'] == 12)
+          and info['format'] == '2-player' and info['rounds'] == 12
+          and info['weights'] == {'points': 1.0, 'cooperation': 0.0, 'win_rate': 0.0}
+          and info['ranking']['tiebreak'] == ['cooperation_percentage', 'win_rate', 'earliest_submission'])
     return 'C' if ok else 'D'"""
 ALL_C = "def all_c(last_moves, my_history, opponents_histories, meta):\n    return 'C'"
 # Tries to fool its opponent by rewriting the table it reads.

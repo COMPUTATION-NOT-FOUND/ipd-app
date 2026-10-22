@@ -126,6 +126,13 @@ function osRankSpec(sim) {
         ? normalizeRanking(sim.ranking || het.ranking || homo.ranking, 'os') : null;
 }
 function osRankGet(e, metric) { return e[OS_RANK_KEYS[metric] || metric]; }
+// Chart title for the ranking number, e.g. "Average response time (lower is better, decides the rank)".
+function osRankTitle(sim) {
+    const spec = osRankSpec(sim);
+    const label = (spec && typeof RANK_METRICS !== 'undefined') ? RANK_METRICS.os[spec.metric][0] : 'Average response time';
+    const dir = (spec ? spec.direction : 'asc') === 'asc' ? 'lower is better' : 'higher is better';
+    return `${label} (${dir}, decides the rank)`;
+}
 function rankedSimEntries(sim, profile) {
     const entries = simEntries(sim, profile);
     const spec = osRankSpec(sim);
@@ -158,14 +165,18 @@ function createSimulationComparisonChart(sim, profile) {
     if (!entries.length || typeof Chart === 'undefined') return;
     const baseline = simBaselineEntry(sim, profile);
 
-    // 1) Throughput bar leaderboard (horizontal) — baseline appended as a grey reference bar.
+    // 1) Bar of the number the ranking uses (default: average response time), in ranked order,
+    //    with the baseline appended as a grey reference bar.
+    const spec = osRankSpec(sim);
+    const rankKey = spec ? (OS_RANK_KEYS[spec.metric] || 'response') : 'response';
+    const rankLabel = (spec && typeof RANK_METRICS !== 'undefined') ? RANK_METRICS.os[spec.metric][0] : 'Average response time';
     const barCtx = document.getElementById('simThroughputChart');
     if (barCtx) {
         const barEntries = baseline ? entries.concat([baseline]) : entries;
         simChartInstances.push(new Chart(barCtx, {
             type: 'bar',
             data: { labels: barEntries.map(e => osWrapLabel(e.label)),
-                datasets: [{ label: 'Throughput', data: barEntries.map(e => e.throughput),
+                datasets: [{ label: rankLabel, data: barEntries.map(e => e[rankKey]),
                     backgroundColor: barEntries.map(e => e.isBaseline ? osBaselineColor() : srAlpha(srToken('--chart-1', '#2dd4bf'), 60)) }] },
             // Bars start at 0 so their lengths compare honestly.
             options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
@@ -313,11 +324,22 @@ function buildSimTable(sim, profile) {
     const up = '<i class="fas fa-arrow-up" style="font-size:0.7em"></i>';
 
     let html = (spec && typeof rankingLineHtml === 'function') ? rankingLineHtml(spec, 'os') : '';
+    const rankKey = spec ? (OS_RANK_KEYS[spec.metric] || 'response') : 'response';
+    const cols = [['response', 'Response', down, 2], ['wait', 'Wait', down, 2], ['throughput', 'Throughput', up, 2],
+                  ['turnaround', 'Turnaround', down, 2], ['makespan', 'Makespan', down, 2],
+                  ['cache', 'Cache Misses', down, 1], ['coop', 'Coop %', up, 1]];
+    // The ranking column goes first and is highlighted, so it is clear which number decides the rank.
+    cols.sort((a, b) => (b[0] === rankKey) - (a[0] === rankKey));
+    const head = cols.map(([k, label, arrow]) => k === rankKey
+        ? `<th style="color:var(--primary-color);" title="This column decides the rank">${label} ${arrow} <i class="fas fa-trophy"></i></th>`
+        : `<th>${label} ${arrow}</th>`).join('');
+    const rowCells = (e, isBase) => cols.map(([k, , , d]) => {
+        if (isBase && k === 'coop') return '<td>&mdash;</td>';
+        const v = cell(e, k, d, k === 'coop' ? '%' : '');
+        return (k === rankKey && !isBase) ? `<td><strong style="color:var(--primary-muted);">${v}</strong></td>` : `<td>${v}</td>`;
+    }).join('');
     html += `<table class="leaderboard-table"><thead><tr>
-        <th>Rank</th><th>${isHet ? 'Mixture' : 'Strategy'}</th>
-        <th>Throughput ${up}</th><th>Wait ${down}</th><th>Turnaround ${down}</th>
-        <th>Response ${down}</th><th>Makespan ${down}</th><th>Cache Misses ${down}</th>
-        <th>Coop % ${up}</th></tr></thead><tbody>`;
+        <th>Rank</th><th>${isHet ? 'Mixture' : 'Strategy'}</th>${head}</tr></thead><tbody>`;
 
     entries.forEach((e, idx) => {
         let nameCell;
@@ -331,29 +353,18 @@ function buildSimTable(sim, profile) {
         html += `<tr class="${e.rank === 1 ? 'rank-1' : ''}">
             <td title="${String(e.rank_label).startsWith('=') ? 'Tied' : ''}"><strong>${osSimEsc(e.rank_label)}</strong></td>
             <td>${nameCell}</td>
-            <td><strong style="color:var(--primary-muted);">${cell(e, 'throughput', 2)}</strong></td>
-            <td>${cell(e, 'wait', 2)}</td>
-            <td>${cell(e, 'turnaround', 2)}</td>
-            <td>${cell(e, 'response', 2)}</td>
-            <td>${cell(e, 'makespan', 2)}</td>
-            <td>${cell(e, 'cache', 1)}</td>
-            <td>${cell(e, 'coop', 1, '%')}</td>
+            ${rowCells(e, false)}
         </tr>`;
     });
     if (baseline) {
         html += `<tr style="border-top:2px solid var(--border-color); color:var(--text-secondary);">
             <td></td><td><em>${osSimEsc(baseline.label)}</em></td>
-            <td><strong>${cell(baseline, 'throughput', 2)}</strong></td>
-            <td>${cell(baseline, 'wait', 2)}</td>
-            <td>${cell(baseline, 'turnaround', 2)}</td>
-            <td>${cell(baseline, 'response', 2)}</td>
-            <td>${cell(baseline, 'makespan', 2)}</td>
-            <td>${cell(baseline, 'cache', 1)}</td>
-            <td>&mdash;</td>
+            ${rowCells(baseline, true)}
         </tr>`;
     }
     html += `</tbody></table>`;
-    if (isHet) html += `<p style="color:var(--text-secondary); font-size:0.85em; margin-top:8px;">Each mixture uses each strategy at most once. The top row is the best-performing combination found.</p>`;
+    html += `<p style="color:var(--text-secondary); font-size:0.85em; margin-top:8px;">${isHet ? 'Each mixture uses each strategy at most once. ' : ''}`
+        + `The highlighted column decides the rank. The baseline row is the plain scheduler with no strategy, for comparison; it is not ranked.</p>`;
     return html;
 }
 
@@ -487,7 +498,7 @@ function renderOSSimulation(container, sim, opts) {
     const barHeight = Math.max(300, 34 * nBars + 60);
     html += `
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(420px, 1fr)); gap:24px; margin-top:10px;">
-            <div style="min-width:0;"><h4>Throughput</h4><div style="position:relative; height:${barHeight}px;"><canvas id="simThroughputChart"></canvas></div></div>
+            <div style="min-width:0;"><h4>${osSimEsc(osRankTitle(sim))}</h4><div style="position:relative; height:${barHeight}px;"><canvas id="simThroughputChart"></canvas></div></div>
             <div style="min-width:0;"><h4>Throughput &uarr; vs Response &darr;</h4><div style="position:relative; height:320px;"><canvas id="simScatterChart"></canvas></div></div>
             <div style="min-width:0;"><h4>Cooperation &uarr; vs Throughput</h4><div style="position:relative; height:320px;"><canvas id="simCoopChart"></canvas></div></div>
             <div style="min-width:0;"><h4>Normalised metric profile <span style="font-weight:normal; color:var(--text-secondary); font-size:0.8em;">(outer = better)</span></h4><div style="position:relative; height:340px;"><canvas id="simRadarChart"></canvas></div></div>

@@ -1744,15 +1744,20 @@ def round_robin_tournament(strategies, rounds=200, payoff_matrix=None, modes=Non
     
     # Context to pass to strategies
     # Ensure consistent structure with reserved keys for future N-player extensions
+    # Weights passed the old way still count, unless the ranking already names its own.
+    if weights and not (isinstance(ranking, dict) and ranking.get('weights')):
+        ranking = {**(ranking if isinstance(ranking, dict) else {}), 'weights': weights}
+    ranking_spec = normalize_ranking(ranking, '1v1')
     tournament_info = {
-        'weights': weights,
+        # The weighted-score weights of this run (Sprint 1: all points).
+        'weights': ranking_spec['weights'],
         'payoff_matrix': payoff_matrix,
         # Reserved keys for future N-player extensions
         'format': '2-player',
         'n_players': 2,
         'payoff_model': 'standard',
         # How this tournament is ranked (strategies can read it), its modes and match length.
-        'ranking': normalize_ranking(ranking, '1v1'),
+        'ranking': ranking_spec,
         'modes': list(modes),
         'rounds': rounds,
     }
@@ -2043,7 +2048,7 @@ def round_robin_tournament(strategies, rounds=200, payoff_matrix=None, modes=Non
         enhanced_leaderboard.append(enhanced_entry)
 
     # Order by the chosen ranking (default: the itinerary's "highest total points wins").
-    ranking = normalize_ranking(ranking, '1v1')
+    ranking = ranking_spec
     sorted_leaderboard = rank_entries(enhanced_leaderboard, ranking, '1v1')
 
     return {
@@ -3064,7 +3069,10 @@ def determine_weighted_results(leaderboard, weights, ranking=None, mode='1v1'):
         entry_with_score['weighted_score'] = weighted_score
         weighted_leaderboard.append(entry_with_score)
     
-    sorted_leaderboard = rank_entries(weighted_leaderboard, ranking, mode)
+    spec = dict(ranking) if isinstance(ranking, dict) else {}
+    if weights and not spec.get('weights'):
+        spec['weights'] = weights
+    sorted_leaderboard = rank_entries(weighted_leaderboard, spec, mode)
     
     # Winner is the first entry
     winner = sorted_leaderboard[0]['name'] if sorted_leaderboard else "No participants"

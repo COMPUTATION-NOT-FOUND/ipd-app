@@ -1117,18 +1117,6 @@
                     .replace(/'/g, "&#039;");
             }
             
-            // Weight logic
-            const currentWinWeight = document.getElementById('winWeight') ? document.getElementById('winWeight').value : 33;
-            const currentCoopWeight = document.getElementById('coopWeight') ? document.getElementById('coopWeight').value : 34;
-            const currentPointsWeight = document.getElementById('pointsWeight') ? document.getElementById('pointsWeight').value : 33;
-
-            // Score = the weighted formula with the current slider weights, computed on EVERY render
-            // (not only after Recalculate), using the same pdScoreEntry as the charts so the table
-            // and the "Weighted score" chart always agree.
-            result.leaderboard.forEach(e => {
-                e.weighted_score = pdScoreEntry(e, currentWinWeight / 100, currentCoopWeight / 100,
-                                                currentPointsWeight / 100, 5).weightedScore;
-            });
             // Order by the chosen ranking (default: the itinerary's highest total points).
             const spec = normalizeRanking(result.ranking, '1v1');
             result.ranking = spec;
@@ -1154,19 +1142,6 @@
             html += `
                     <div class="leaderboard">
                         ${rankingControlsHtml('1v1', spec, 'rk1v1', 'applyRanking1v1')}
-                        <div style="background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px; margin-bottom: 15px; display: ${useWeights ? 'block' : 'none'};">
-                            <h4 style="margin: 0 0 10px 0;">Weighted score weights</h4>
-                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px;">
-                                <div><label>Win Rate: <span id="winWeightValue">${currentWinWeight}</span>%</label><input type="range" id="winWeight" min="0" max="100" value="${currentWinWeight}" data-action="updateWeights" data-on="input" style="width: 100%;"></div>
-                                <div><label>Cooperation: <span id="coopWeightValue">${currentCoopWeight}</span>%</label><input type="range" id="coopWeight" min="0" max="100" value="${currentCoopWeight}" data-action="updateWeights" data-on="input" style="width: 100%;"></div>
-                                <div><label>Points: <span id="pointsWeightValue">${currentPointsWeight}</span>%</label><input type="range" id="pointsWeight" min="0" max="100" value="${currentPointsWeight}" data-action="updateWeights" data-on="input" style="width: 100%;"></div>
-                            </div>
-                            <div style="text-align: center; margin-top: 10px;">
-                                <span id="weightStatus" style="font-weight: bold; color: var(--success-color);">Total: 100% ✓</span>
-                                <button data-action="recalculateRanking" id="recalcBtn" style="margin-left: 15px; background: var(--primary-color); color: var(--color-paper);"><i class="fas fa-chart-bar"></i> Recalculate</button>
-                                <button data-action="resetWeights" style="margin-left: 10px; background: var(--warning-color); color: var(--color-paper);"><i class="fas fa-undo"></i> Reset</button>
-                            </div>
-                        </div>
                         <h4>Leaderboard</h4>
                         ${rankingLineHtml(spec, '1v1')}
                         <table>
@@ -1217,7 +1192,6 @@
             html += `</div></div>`;
             
             document.getElementById('results').innerHTML = html;
-            updateWeights();
             // Upgraded multi-chart view (bar, scatter, radar, per-mode bar, head-to-head) — the
             // same renderer the results page and OS-sim use, for a consistent look across modes.
             renderPDResults('pdCharts1v1', {
@@ -1225,7 +1199,7 @@
                 ranking: spec, rank_mode: '1v1',
                 matches: result.matches,
                 modes: (result.tournament_info && result.tournament_info.modes) || result.modes || [],
-                weights: { win_rate: currentWinWeight / 100, cooperation: currentCoopWeight / 100, points: currentPointsWeight / 100 },
+                weights: spec.weights,
                 payoff_matrix: (typeof getPayoffMatrix === 'function') ? getPayoffMatrix() : null,
             });
             document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
@@ -1276,24 +1250,6 @@
         
         function closeMatchModal() { document.getElementById('matchModal').style.display = 'none'; }
         window.onclick = function(e) { if(e.target == document.getElementById('matchModal')) closeMatchModal(); }
-        
-        function updateWeights() {
-            const total = parseInt(document.getElementById('winWeight').value) + parseInt(document.getElementById('coopWeight').value) + parseInt(document.getElementById('pointsWeight').value);
-            document.getElementById('winWeightValue').innerText = document.getElementById('winWeight').value;
-            document.getElementById('coopWeightValue').innerText = document.getElementById('coopWeight').value;
-            document.getElementById('pointsWeightValue').innerText = document.getElementById('pointsWeight').value;
-            const status = document.getElementById('weightStatus');
-            status.innerText = `Total: ${total}%` + (total===100 ? ' ✓' : '');
-            status.style.color = total===100 ? 'var(--success-color)' : 'var(--danger-color)';
-            document.getElementById('recalcBtn').disabled = total !== 100;
-        }
-        
-        function resetWeights() {
-            document.getElementById('winWeight').value = 33;
-            document.getElementById('coopWeight').value = 34;
-            document.getElementById('pointsWeight').value = 33;
-            updateWeights();
-        }
         
         function recalculateRanking() {
              // displayTournamentResults reads the current slider weights and recomputes every
@@ -1766,19 +1722,8 @@
             const nGroups = info.n_groups ?? '';
             const groupSize = info.group_size ?? '';
 
-            // Default ranking weights (mirrors 1v1); kept on the result so re-renders persist them.
-            const npW = (info.weights && info.weights.win != null)
-                ? info.weights : { win: 0.33, coop: 0.34, points: 0.33 };
-            const npWin = Math.round(npW.win * 100), npCoop = Math.round(npW.coop * 100), npPoints = Math.round(npW.points * 100);
-
-            // Keep the latest result for slider recalculation, then compute a weighted Score per
-            // entry (same formula as 1v1: win-rate / cooperation / points-normalized) and rank by it.
+            // Keep the latest result so the ranking controls can re-sort it.
             currentNpResult = result;
-            // Same pdScoreEntry as 1v1 and the charts (normalised cooperation %, the server's
-            // points_percentage), so the table and the "Weighted score" chart rank identically.
-            (result.leaderboard || []).forEach(e => {
-                e.weighted_score = pdScoreEntry(e, npW.win, npW.coop, npW.points, 5).weightedScore;
-            });
             // Order by the chosen ranking (default: the itinerary's highest total points).
             const spec = normalizeRanking(result.ranking, 'nplayer');
             result.ranking = spec;
@@ -1797,20 +1742,6 @@
                 </div>
                 ${disqualifiedHtml(collectDisqualified(result))}
                 ${rankingControlsHtml('nplayer', spec, 'rkNp', 'applyRankingNp')}
-
-                <div style="background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px; margin-bottom: 15px; display: ${useWeights ? 'block' : 'none'};">
-                    <h4 style="margin: 0 0 10px 0;">Weighted score weights</h4>
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px;">
-                        <div><label>Win Rate: <span id="npWinWeightValue">${npWin}</span>%</label><input type="range" id="npWinWeight" min="0" max="100" value="${npWin}" data-action="updateNpWeights" data-on="input" style="width: 100%;"></div>
-                        <div><label>Cooperation: <span id="npCoopWeightValue">${npCoop}</span>%</label><input type="range" id="npCoopWeight" min="0" max="100" value="${npCoop}" data-action="updateNpWeights" data-on="input" style="width: 100%;"></div>
-                        <div><label>Points: <span id="npPointsWeightValue">${npPoints}</span>%</label><input type="range" id="npPointsWeight" min="0" max="100" value="${npPoints}" data-action="updateNpWeights" data-on="input" style="width: 100%;"></div>
-                    </div>
-                    <div style="text-align: center; margin-top: 10px;">
-                        <span id="npWeightStatus" style="font-weight: bold; color: var(--success-color);">Total: 100% ✓</span>
-                        <button data-action="recalculateNpRanking" id="npRecalcBtn" style="margin-left: 15px; background: var(--primary-color); color: var(--color-paper);"><i class="fas fa-chart-bar"></i> Recalculate</button>
-                        <button data-action="resetNpWeights" style="margin-left: 10px; background: var(--warning-color); color: var(--color-paper);"><i class="fas fa-undo"></i> Reset</button>
-                    </div>
-                </div>
 
                 <div class="leaderboard">
                     <h4>Leaderboard</h4>
@@ -1868,52 +1799,24 @@
             html += `</div>`;
 
             document.getElementById('nplayerResults').innerHTML = html;
-            updateNpWeights();   // sync the slider labels + Recalculate button state
             renderPDResults('pdChartsNplayer', {
                 leaderboard: result.leaderboard,
                 ranking: spec, rank_mode: 'nplayer',
                 matches: [],  // N-player matches are group-shaped, not pairwise
                 modes: modes,
-                weights: { win_rate: npW.win, cooperation: npW.coop, points: npW.points },
+                weights: spec.weights,
             });
             document.getElementById('nplayerResults').scrollIntoView({behavior: 'smooth'});
         }
 
         // N-Player ranking-weight controls (mirror the 1v1 sliders, with np-prefixed ids).
         let currentNpResult = null;
-        function updateNpWeights() {
-            const w = document.getElementById('npWinWeight'); if (!w) return;
-            const total = parseInt(document.getElementById('npWinWeight').value)
-                        + parseInt(document.getElementById('npCoopWeight').value)
-                        + parseInt(document.getElementById('npPointsWeight').value);
-            document.getElementById('npWinWeightValue').innerText = document.getElementById('npWinWeight').value;
-            document.getElementById('npCoopWeightValue').innerText = document.getElementById('npCoopWeight').value;
-            document.getElementById('npPointsWeightValue').innerText = document.getElementById('npPointsWeight').value;
-            const status = document.getElementById('npWeightStatus');
-            status.innerText = `Total: ${total}%` + (total === 100 ? ' ✓' : '');
-            status.style.color = total === 100 ? 'var(--success-color)' : 'var(--danger-color)';
-            document.getElementById('npRecalcBtn').disabled = total !== 100;
-        }
-        function resetNpWeights() {
-            document.getElementById('npWinWeight').value = 33;
-            document.getElementById('npCoopWeight').value = 34;
-            document.getElementById('npPointsWeight').value = 33;
-            updateNpWeights();
-        }
+        // Ranking controls (Rank by / weights / ties broken by) for the N-Player results.
         function applyRankingNp(arg) {
             if (!currentNpResult) return;
             currentNpResult.ranking = arg === 'reset'
                 ? normalizeRanking(null, 'nplayer') : readRankingControls('rkNp', 'nplayer');
             displayNPlayerTournamentResults(currentNpResult);
-        }
-        function recalculateNpRanking() {
-            if (!currentNpResult) return;
-            const win = parseInt(document.getElementById('npWinWeight').value) / 100;
-            const coop = parseInt(document.getElementById('npCoopWeight').value) / 100;
-            const points = parseInt(document.getElementById('npPointsWeight').value) / 100;
-            currentNpResult.tournament_info = currentNpResult.tournament_info || {};
-            currentNpResult.tournament_info.weights = { win, coop, points };
-            displayNPlayerTournamentResults(currentNpResult);   // recomputes Score + re-sorts + re-renders
         }
 
         /* ===== OS Simulation Practice Logic ===== */

@@ -29,16 +29,37 @@ def test_os_lowest_response_time_first():
 
 
 def test_tiebreak_chain_in_order():
+    # Sprint 1: points, then cooperation %, then win rate, then earliest submission.
     rows = [
-        {'name': 'late', 'total_points': 10, 'wins': 2, 'cooperation_percentage': 50, 'submitted_at': '2026-10-22T10:00:00Z'},
-        {'name': 'early', 'total_points': 10, 'wins': 2, 'cooperation_percentage': 50, 'submitted_at': '2026-10-21T10:00:00Z'},
-        {'name': 'coop', 'total_points': 10, 'wins': 2, 'cooperation_percentage': 80},
-        {'name': 'wins', 'total_points': 10, 'wins': 5, 'cooperation_percentage': 0},
-        {'name': 'top', 'total_points': 11, 'wins': 0},
+        {'name': 'late', 'total_points': 10, 'wins': 2, 'losses': 2, 'cooperation_percentage': 50, 'submitted_at': '2026-10-22T10:00:00Z'},
+        {'name': 'early', 'total_points': 10, 'wins': 2, 'losses': 2, 'cooperation_percentage': 50, 'submitted_at': '2026-10-21T10:00:00Z'},
+        {'name': 'winner', 'total_points': 10, 'wins': 4, 'losses': 0, 'cooperation_percentage': 50},
+        {'name': 'coop', 'total_points': 10, 'wins': 0, 'losses': 4, 'cooperation_percentage': 80},
+        {'name': 'top', 'total_points': 11, 'wins': 0, 'losses': 4},
     ]
     ranked = rank_entries(rows, None, '1v1')
-    assert _names(ranked) == ['top', 'wins', 'coop', 'early', 'late']
+    assert _names(ranked) == ['top', 'coop', 'winner', 'early', 'late']
     assert [r['rank'] for r in ranked] == [1, 2, 3, 4, 5]
+    assert ranked[2]['win_rate'] == 1.0
+
+
+def test_weighted_score_uses_the_ranking_weights():
+    rows = [{'name': 'coop', 'wins': 0, 'losses': 2, 'cooperation_percentage': 100, 'points_percentage': 40},
+            {'name': 'pts', 'wins': 2, 'losses': 0, 'cooperation_percentage': 0, 'points_percentage': 80}]
+    all_points = rank_entries([dict(r) for r in rows], {'metric': 'weighted_score'}, '1v1')
+    assert _names(all_points) == ['pts', 'coop'] and round(all_points[0]['weighted_score'], 6) == 80
+    coop_heavy = rank_entries([dict(r) for r in rows],
+                              {'metric': 'weighted_score', 'weights': {'cooperation': 70, 'points': 30}}, '1v1')
+    assert _names(coop_heavy) == ['coop', 'pts']
+    assert round(coop_heavy[0]['weighted_score'], 6) == 82      # 1.0*70 + 0.4*30
+
+
+def test_weights_are_normalized():
+    from ranking import normalize_weights, describe_weights
+    assert normalize_weights(None) == {'points': 1.0, 'cooperation': 0.0, 'win_rate': 0.0}
+    assert normalize_weights({'points': 60, 'cooperation': 20, 'win_rate': 20}) ==         {'points': 0.6, 'cooperation': 0.2, 'win_rate': 0.2}
+    assert normalize_weights({'points': -5, 'cooperation': 'x'}) == normalize_weights(None)
+    assert describe_weights({'points': 1}) == 'points 100%'
 
 
 def test_everything_equal_keeps_entry_order():
@@ -77,12 +98,12 @@ def test_normalize_rejects_unknown_fields():
     spec = normalize_ranking({'metric': '__class__', 'direction': 'sideways',
                               'tiebreak': ['wins', 'code', 'wins', 7], 'shared_rank': 1}, '1v1')
     assert spec == {'metric': 'total_points', 'direction': 'desc', 'tiebreak': ['wins'],
-                    'shared_rank': True}
+                    'shared_rank': True, 'weights': {'points': 1.0, 'cooperation': 0.0, 'win_rate': 0.0}}
     assert normalize_ranking('junk', 'os') == DEFAULT_RANKING['os']
 
 
 def test_description():
     assert describe_ranking(DEFAULT_RANKING['1v1'], '1v1') == (
-        "Ranked by total points (highest first). Ties: wins, then cooperation %, then earliest submission.")
+        "Ranked by total points (highest first). Ties: cooperation %, then win rate, then earliest submission.")
     assert describe_ranking(DEFAULT_RANKING['os'], 'os').startswith(
         "Ranked by average response time (lowest first).")

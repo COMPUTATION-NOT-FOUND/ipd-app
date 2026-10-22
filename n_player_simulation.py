@@ -329,6 +329,13 @@ def describe_payoff_model(payoff_model):
     return info
 
 
+def _with_weights(ranking, weights):
+    """Weights passed the old way still count, unless the ranking already names its own."""
+    if weights and not (isinstance(ranking, dict) and ranking.get('weights')):
+        return {**(ranking if isinstance(ranking, dict) else {}), 'weights': weights}
+    return ranking
+
+
 def _play_group(group_strategies, *, group_idx, active_modes, legacy_mode, modes, seed, rounds,
                 payoff_model, weights, discount_factor, stochastic_prob, fixed_random_rounds,
                 ranking=None):
@@ -340,7 +347,8 @@ def _play_group(group_strategies, *, group_idx, active_modes, legacy_mode, modes
         'modes': active_modes,
         'n_players': len(group_strategies),
         'group_index': group_idx,
-        'weights': weights,
+        # The weighted-score weights of this run (from the ranking; Sprint 1: all points).
+        'weights': (ranking or {}).get('weights', weights),
         'ranking': ranking,
         'rounds': rounds,
     }
@@ -504,7 +512,7 @@ def group_tournament(
                 weights=weights, discount_factor=discount_factor,
                 stochastic_prob=stochastic_prob,
                 fixed_random_rounds=tournament_fixed_random_rounds,
-                ranking=normalize_ranking(ranking, 'nplayer'),
+                ranking=normalize_ranking(_with_weights(ranking, weights), 'nplayer'),
             )
             if not errored:
                 break
@@ -715,7 +723,7 @@ def group_tournament(
         })
 
     # Order by the chosen ranking (default: the itinerary's "highest total points wins").
-    ranking = normalize_ranking(ranking, 'nplayer')
+    ranking = normalize_ranking(_with_weights(ranking, weights), 'nplayer')
     leaderboard = rank_entries(leaderboard, ranking, 'nplayer')
 
     # Every disqualified strategy with why, so the page can list them apart from the ranking.
