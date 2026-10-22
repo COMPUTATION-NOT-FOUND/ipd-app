@@ -883,9 +883,15 @@ def game(player_a_code, player_a_name, player_b_code, player_b_name, rounds=200,
             'payoff_model': 'standard'
         }
     else:
-        # If tournament_info was provided but payoff_matrix is None, update it with resolved default
+        # Copy, then fill in the resolved table (if missing) and this match's mode. Copying keeps
+        # the tournament's shared dict unchanged between matches.
+        tournament_info = dict(tournament_info)
         if tournament_info.get('payoff_matrix') is None:
             tournament_info['payoff_matrix'] = payoff_matrix
+    tournament_info['mode'] = mode
+    # Each player reads its own copy, so one strategy can't change the table the other one sees.
+    import copy as _copy
+    player_info = [_copy.deepcopy(tournament_info), _copy.deepcopy(tournament_info)]
     
     exec_context = {'TOURNAMENT_INFO': tournament_info}
 
@@ -1043,7 +1049,7 @@ def game(player_a_code, player_a_name, player_b_code, player_b_name, rounds=200,
         # 'D' (validate_move); any failure ends the match with that player named as the culprit.
         def _play(func, player, last_moves, own_history, opp_history, player_index):
             meta = {'round': current_round, 'n_players': 2, 'player_index': player_index,
-                    'tournament_info': tournament_info, 'rng': strategy_rng}
+                    'tournament_info': player_info[player_index], 'rng': strategy_rng}
             try:
                 move = validate_move(run_with_limit(call_strategy, func, last_moves, own_history.copy(),
                                                     [opp_history.copy()], meta, limit=MAX_STRATEGY_INSTRUCTIONS))
@@ -1691,7 +1697,11 @@ def round_robin_tournament(strategies, rounds=200, payoff_matrix=None, modes=Non
         # Reserved keys for future N-player extensions
         'format': '2-player',
         'n_players': 2,
-        'payoff_model': 'standard'
+        'payoff_model': 'standard',
+        # How this tournament is ranked (strategies can read it), its modes and match length.
+        'ranking': normalize_ranking(ranking, '1v1'),
+        'modes': list(modes),
+        'rounds': rounds,
     }
 
     # --- Step 1: Pre-validation and Filtering ---

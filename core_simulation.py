@@ -455,7 +455,8 @@ class OSSimulator:
                 'n_players': self.num_cores,
                 'player_index': core_idx,
                 'rng': self.rng,
-                'tournament_info': {'format': 'os_simulation', 'n_players': self.num_cores},
+                'tournament_info': {'format': 'os_simulation', 'n_players': self.num_cores,
+                                    'scheduler': self.scheduler_name},
             }
             # Same per-call bounds as 1v1 / N-Player: the instruction cap stops a runaway loop,
             # and the move must be exactly 'C' or 'D'. A failure is raised, not papered over.

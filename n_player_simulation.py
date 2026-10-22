@@ -173,11 +173,13 @@ def game_n(
         **tournament_info,
         'format': 'n_player',
         'n_players': n_players,
-        'payoff_model': {
-            'type': type(payoff_model).__name__
-        }
+        'payoff_model': describe_payoff_model(payoff_model),
     }
     
+    # Each player reads its own copy, so one strategy can't change what the others see.
+    import copy as _copy
+    player_info = [_copy.deepcopy(tournament_info) for _ in range(n_players)]
+
     # Initialize tracking structures
     total_points = [0.0] * n_players
     coop_counts = [0] * n_players
@@ -232,7 +234,7 @@ def game_n(
                 'round': round_num,
                 'n_players': n_players,
                 'player_index': player_idx,
-                'tournament_info': tournament_info,
+                'tournament_info': player_info[player_idx],
                 'rng': rng  # Pass RNG for deterministic randomness
             }
             
@@ -308,8 +310,28 @@ def game_n(
     return result
 
 
+def describe_payoff_model(payoff_model):
+    """What a strategy may know about how the group is paid (meta['tournament_info']['payoff_model']).
+
+    Public Goods: {'type': 'PublicGoodsPayoff', 'name': 'public_goods', 'b': benefit, 'c': cost,
+    'nonlinear': {...}}. Pairwise: {'type': 'PairwiseMatrixPayoff', 'name': 'pairwise_matrix',
+    'payoff_matrix': {...}, 'aggregate': 'sum'|'avg'}."""
+    info = {'type': type(payoff_model).__name__}
+    if hasattr(payoff_model, 'b') and hasattr(payoff_model, 'c'):
+        info.update(name='public_goods', b=payoff_model.b, c=payoff_model.c,
+                    nonlinear=dict(getattr(payoff_model, 'nonlinear', None) or {'type': 'linear'}))
+    elif hasattr(payoff_model, 'payoff_matrix'):
+        info.update(name='pairwise_matrix',
+                    payoff_matrix={k: list(v) for k, v in payoff_model.payoff_matrix.items()},
+                    aggregate=getattr(payoff_model, 'aggregate', 'sum'))
+    elif hasattr(payoff_model, 'u_C'):
+        info.update(name='kcoop_tensor', u_C=list(payoff_model.u_C), u_D=list(payoff_model.u_D))
+    return info
+
+
 def _play_group(group_strategies, *, group_idx, active_modes, legacy_mode, modes, seed, rounds,
-                payoff_model, weights, discount_factor, stochastic_prob, fixed_random_rounds):
+                payoff_model, weights, discount_factor, stochastic_prob, fixed_random_rounds,
+                ranking=None):
     """Play one group in every mode. Returns (per_mode_results, errored) where ``errored`` maps
     a local player index to its failure reason; on a failure the remaining modes are skipped."""
     tournament_info_base = {
@@ -319,6 +341,8 @@ def _play_group(group_strategies, *, group_idx, active_modes, legacy_mode, modes
         'n_players': len(group_strategies),
         'group_index': group_idx,
         'weights': weights,
+        'ranking': ranking,
+        'rounds': rounds,
     }
     per_mode_results = {}
     errored = {}
@@ -480,6 +504,7 @@ def group_tournament(
                 weights=weights, discount_factor=discount_factor,
                 stochastic_prob=stochastic_prob,
                 fixed_random_rounds=tournament_fixed_random_rounds,
+                ranking=normalize_ranking(ranking, 'nplayer'),
             )
             if not errored:
                 break
