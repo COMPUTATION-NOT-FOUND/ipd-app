@@ -91,6 +91,7 @@ from flask_limiter.util import get_remote_address
 from payoff_models import PairwiseMatrixPayoff, PublicGoodsPayoff, KCooperatorTensorPayoff
 from n_player_simulation import group_tournament, call_strategy, validate_move, describe_strategy_error
 from tournament_package import sha256_text, canonical_json
+from ranking import normalize_ranking, rank_entries, describe_ranking, DEFAULT_RANKING
 
 # --- SECURITY & LIMITS ---
 # Shared instruction cap (one exception class and one tracer for every engine). See
@@ -854,7 +855,8 @@ def game(player_a_code, player_a_name, player_b_code, player_b_name, rounds=200,
         return {
             'winner': 'Error', 'a_points': 0, 'b_points': 0, 'rounds': 0,
             'player_a': player_a_name, 'player_b': player_b_name, 'rounds_detail': [],
-            'error': f"Security Violation in Player A code: {error_a}"
+            'error': f"Security Violation in Player A code: {error_a}",
+            'error_player': 'A', 'error_type': 'SecurityViolation',
         }
 
     safe_b, error_b = is_safe_code(player_b_code)
@@ -862,7 +864,8 @@ def game(player_a_code, player_a_name, player_b_code, player_b_name, rounds=200,
         return {
             'winner': 'Error', 'a_points': 0, 'b_points': 0, 'rounds': 0,
             'player_a': player_a_name, 'player_b': player_b_name, 'rounds_detail': [],
-            'error': f"Security Violation in Player B code: {error_b}"
+            'error': f"Security Violation in Player B code: {error_b}",
+            'error_player': 'B', 'error_type': 'SecurityViolation',
         }
 
     # Context for strategies (Weights, etc)
@@ -971,6 +974,8 @@ def game(player_a_code, player_a_name, player_b_code, player_b_name, rounds=200,
     player_b_func = extract_strategy_function(player_b_code, player_b_globals, prefer_n_args=4)
     
     if player_a_func is None or player_b_func is None:
+        # Name the player whose code has no usable function, so the right one is disqualified.
+        missing = 'A' if player_a_func is None else 'B'
         return { # Return safe error instead of raising
             'winner': 'Error',
             'a_points': 0,
@@ -979,7 +984,9 @@ def game(player_a_code, player_a_name, player_b_code, player_b_name, rounds=200,
             'player_a': player_a_name,
             'player_b': player_b_name,
             'rounds_detail': [],
-            'error': "Could not find strategy functions"
+            'error': "no strategy function found in the code",
+            'error_player': missing,
+            'error_type': 'MissingFunction',
         }
 
     A_total_points = 0
@@ -1616,7 +1623,7 @@ def local_gallery_delete():
 # path and no credentials. Admins upload tournament results on the website too.
 
 
-def round_robin_tournament(strategies, rounds=200, payoff_matrix=None, modes=None, discount_factor=0.95, stochastic_prob=0.995, weights=None, seed=None):
+def round_robin_tournament(strategies, rounds=200, payoff_matrix=None, modes=None, discount_factor=0.95, stochastic_prob=0.995, weights=None, seed=None, ranking=None):
     """
     Run a round robin tournament with multiple strategies and game modes
     """
@@ -1650,8 +1657,7 @@ def round_robin_tournament(strategies, rounds=200, payoff_matrix=None, modes=Non
         else:
             app.logger.warning(f"DISQUALIFIED strategy '{strategy['name']}' ({strategy.get('player_name', 'Unknown')}). Reason: {error}")
             disqualified_strategies.append({
-                'name': strategy['name'],
-                'error': error
+                'name': strategy['name'], 'reason': error, 'error': error, 'stage': 'safety check',
             })
     
     # Update the strategies list to only include valid ones
@@ -1673,12 +1679,100 @@ def round_robin_tournament(strategies, rounds=200, payoff_matrix=None, modes=Non
             'disqualified': disqualified_strategies
         }
 
+    # Generate random round count for 'random' mode if applicable
+    # Use RNG instance if available
+    if rng:
+        fixed_random_rounds = rng.randint(100, 300)
+    else:
+        fixed_random_rounds = randint(100, 300)
+
+    # Generate all possible pairs
+    strategy_pairs = list(combinations(strategies, 2))
+    # Strategies that failed during a match (crash, instruction cap, a move other than 'C'/'D').
+    # name -> {name, reason, stage, opponent, mode}. A failed strategy is DISQUALIFIED: it is
+    # removed from the leaderboard and every match it played is thrown out, so nobody gains or
+    # loses points from having met it.
+    runtime_dq = {}
+
+    app.logger.info(f"=== Round Robin Tournament: {len(strategies)} strategies, {len(strategy_pairs)} matches ===")
+    app.logger.info(f"Modes: {modes}")
+
+    # --- Step 2: play every pairing (a strategy stops playing once it has been disqualified) ---
+    played = []   # (strategy_a, strategy_b, [match_result per mode])
+    for i, (strategy_a, strategy_b) in enumerate(strategy_pairs):
+        if strategy_a['name'] in runtime_dq or strategy_b['name'] in runtime_dq:
+            continue   # would be thrown out anyway
+        app.logger.info(f"Match {i+1}/{len(strategy_pairs)}: {strategy_a['name']} vs {strategy_b['name']}")
+        pair_mode_results = []
+        for mode_idx, mode in enumerate(modes):
+            # Deterministic sub-seed for this match if a main seed was given
+            match_seed = None
+            if seed is not None:
+                match_seed = seed + i * 1000 + mode_idx
+            match_result = game(
+                strategy_a['code'], strategy_a['name'], strategy_b['code'], strategy_b['name'],
+                rounds, payoff_matrix, mode=mode, fixed_random_rounds=fixed_random_rounds,
+                discount_factor=discount_factor, stochastic_prob=stochastic_prob,
+                tournament_info=tournament_info, seed=match_seed,
+            )
+            pair_mode_results.append(match_result)
+            if match_result.get('error'):
+                break   # no point playing the other modes of a pair that is void
+        for r in pair_mode_results:
+            if r.get('error'):
+                who = r.get('error_player')
+                culprits = {'A': [strategy_a], 'B': [strategy_b]}.get(who, [strategy_a, strategy_b])
+                for culprit, opponent in ((c, strategy_b if c is strategy_a else strategy_a) for c in culprits):
+                    runtime_dq.setdefault(culprit['name'], {
+                        'name': culprit['name'], 'reason': r['error'], 'error': r['error'],
+                        'stage': 'during the run', 'opponent': opponent['name'],
+                        'mode': r.get('mode'),
+                    })
+        played.append((strategy_a, strategy_b, pair_mode_results))
+
+    def _void_record(strategy_a, strategy_b, pair_mode_results):
+        # A match that involved a disqualified strategy. Kept so the page can show what went
+        # wrong (round, error, partial score), but it is not counted for anyone.
+        n = max(len(pair_mode_results), 1)
+        rec = {
+            'player_a': strategy_a['name'],
+            'player_b': strategy_b['name'],
+            'a_points': sum(r['a_points'] for r in pair_mode_results) / n,
+            'b_points': sum(r['b_points'] for r in pair_mode_results) / n,
+            'winner': 'Void',
+            'void': True,
+            'mode_results': pair_mode_results,
+        }
+        for r in pair_mode_results:
+            if r.get('error'):
+                rec['error'] = r['error']
+                rec['error_type'] = r.get('error_type', 'Exception')
+                rec['error_player'] = r.get('error_player', 'Unknown')
+                rec['terminated_early'] = r.get('terminated_early', True)
+                break
+        return rec
+
+    void_matches = [_void_record(a, b, pm) for a, b, pm in played
+                    if a['name'] in runtime_dq or b['name'] in runtime_dq]
+
+    strategies = [s for s in strategies if s['name'] not in runtime_dq]
+    disqualified_strategies = disqualified_strategies + list(runtime_dq.values())
+    if len(strategies) < 2:
+        n_dq = len(disqualified_strategies)
+        error_msg = (f"Not enough strategies left to rank: {n_dq} "
+                     f"{'was' if n_dq == 1 else 'were'} disqualified (see below for which and why).")
+        app.logger.error(error_msg)
+        return {'leaderboard': [], 'matches': void_matches, 'total_matches': 0, 'error': error_msg,
+                'disqualified': disqualified_strategies,
+                'runtime_errors': list(runtime_dq.values())}
+
+    # --- Step 3: score only the matches between strategies that were not disqualified ---
     results = []
     leaderboard = {strategy['name']: {
         'total_points': 0,
-        'total_raw_points': 0, 
-        'wins': 0, 
-        'draws': 0, 
+        'total_raw_points': 0,
+        'wins': 0,
+        'draws': 0,
         'losses': 0,
         'cooperates': 0,
         'defects': 0,
@@ -1687,153 +1781,58 @@ def round_robin_tournament(strategies, rounds=200, payoff_matrix=None, modes=Non
         'mode_raw_points': {mode: 0 for mode in modes},
         'mode_stats': {mode: {'cooperates': 0, 'defects': 0, 'total_moves': 0} for mode in modes}
     } for strategy in strategies}
-    
-    # Generate random round count for 'random' mode if applicable
-    # Use RNG instance if available
-    if rng:
-        fixed_random_rounds = rng.randint(100, 300)
-    else:
-        fixed_random_rounds = randint(100, 300)
-    
-    # Generate all possible pairs
-    strategy_pairs = list(combinations(strategies, 2))
-    runtime_errors = {}   # strategy name -> first failure reason during a match
-    
-    app.logger.info(f"=== Round Robin Tournament: {len(strategies)} strategies, {len(strategy_pairs)} matches ===")
-    app.logger.info(f"Modes: {modes}")
-    
-    for i, (strategy_a, strategy_b) in enumerate(strategy_pairs):
-        app.logger.info(f"Match {i+1}/{len(strategy_pairs)}: {strategy_a['name']} vs {strategy_b['name']}")
-        
-        # Run games for all selected modes and average the results
-        pair_a_points = 0
-        pair_b_points = 0
-        pair_mode_results = []
-        
-        for mode_idx, mode in enumerate(modes):
-            # Generate deterministic sub-seed for this match if main seed provided
-            match_seed = None
-            if seed is not None:
-                # Combine tournament seed with match index and mode index
-                match_seed = seed + i * 1000 + mode_idx
-            
-            match_result = game(
-                strategy_a['code'],
-                strategy_a['name'],
-                strategy_b['code'],
-                strategy_b['name'],
-                rounds,
-                payoff_matrix,
-                mode=mode,
-                fixed_random_rounds=fixed_random_rounds,
-                discount_factor=discount_factor,
-                stochastic_prob=stochastic_prob,
-                tournament_info=tournament_info,
-                seed=match_seed
-            )
-            
+    submitted_at = {s['name']: s.get('submitted_at') for s in strategies}
+
+    for strategy_a, strategy_b, pair_mode_results in played:
+        if strategy_a['name'] in runtime_dq or strategy_b['name'] in runtime_dq:
+            continue
+        A, B = leaderboard[strategy_a['name']], leaderboard[strategy_b['name']]
+        pair_a_points = pair_b_points = 0
+        for mode, match_result in zip(modes, pair_mode_results):
             pair_a_points += match_result['a_points']
             pair_b_points += match_result['b_points']
-            pair_mode_results.append(match_result)
-            
-            # Track points per mode
-            leaderboard[strategy_a['name']]['mode_points'][mode] += match_result['a_points']
-            leaderboard[strategy_b['name']]['mode_points'][mode] += match_result['b_points']
+            for side, prefix in ((A, 'a'), (B, 'b')):
+                side['mode_points'][mode] += match_result[f'{prefix}_points']
+                side['mode_raw_points'][mode] += match_result[f'{prefix}_total_points']
+                side['total_raw_points'] += match_result[f'{prefix}_total_points']
+                side['cooperates'] += match_result[f'{prefix}_coops']
+                side['mode_stats'][mode]['cooperates'] += match_result[f'{prefix}_coops']
+                side['defects'] += match_result[f'{prefix}_defects']
+                side['mode_stats'][mode]['defects'] += match_result[f'{prefix}_defects']
+                side['total_moves'] += match_result['rounds']
+                side['mode_stats'][mode]['total_moves'] += match_result['rounds']
 
-            # Track raw points per mode
-            leaderboard[strategy_a['name']]['mode_raw_points'][mode] += match_result['a_total_points']
-            leaderboard[strategy_b['name']]['mode_raw_points'][mode] += match_result['b_total_points']
-            
-            # Track total raw points
-            leaderboard[strategy_a['name']]['total_raw_points'] += match_result['a_total_points']
-            leaderboard[strategy_b['name']]['total_raw_points'] += match_result['b_total_points']
-            
-            # Count cooperates and defects directly from match results (accurate totals)
-            # Update for Player A
-            leaderboard[strategy_a['name']]['cooperates'] += match_result['a_coops']
-            leaderboard[strategy_a['name']]['mode_stats'][mode]['cooperates'] += match_result['a_coops']
-            
-            leaderboard[strategy_a['name']]['defects'] += match_result['a_defects']
-            leaderboard[strategy_a['name']]['mode_stats'][mode]['defects'] += match_result['a_defects']
-            
-            leaderboard[strategy_a['name']]['total_moves'] += match_result['rounds']
-            leaderboard[strategy_a['name']]['mode_stats'][mode]['total_moves'] += match_result['rounds']
-            
-            # Update for Player B
-            leaderboard[strategy_b['name']]['cooperates'] += match_result['b_coops']
-            leaderboard[strategy_b['name']]['mode_stats'][mode]['cooperates'] += match_result['b_coops']
-            
-            leaderboard[strategy_b['name']]['defects'] += match_result['b_defects']
-            leaderboard[strategy_b['name']]['mode_stats'][mode]['defects'] += match_result['b_defects']
-            
-            leaderboard[strategy_b['name']]['total_moves'] += match_result['rounds']
-            leaderboard[strategy_b['name']]['mode_stats'][mode]['total_moves'] += match_result['rounds']
-
-        # Calculate average score for the pair across all modes
+        # Average score for the pair across all modes
         avg_a_points = pair_a_points / len(modes)
         avg_b_points = pair_b_points / len(modes)
+        A['total_points'] += avg_a_points
+        B['total_points'] += avg_b_points
 
-        # Update leaderboard points
-        leaderboard[strategy_a['name']]['total_points'] += avg_a_points
-        leaderboard[strategy_b['name']]['total_points'] += avg_b_points
-
-        # A strategy that failed (crash, instruction cap, or a move other than 'C'/'D') in any
-        # mode forfeits the pair: the opponent gets the win. Without this a round-1 crash scored
-        # 0-0 and was counted as a draw, so the broken strategy lost nothing.
-        failed = {r.get('error_player') for r in pair_mode_results if r.get('error')}
-        if failed == {'A'}:
-            pair_winner = 'B'
-        elif failed == {'B'}:
-            pair_winner = 'A'
-        elif failed:
-            pair_winner = None          # both failed: nobody earns the win
-        elif avg_a_points > avg_b_points:
+        if avg_a_points > avg_b_points:
             pair_winner = 'A'
         elif avg_a_points < avg_b_points:
             pair_winner = 'B'
         else:
             pair_winner = 'Draw'
-
         if pair_winner == 'A':
-            leaderboard[strategy_a['name']]['wins'] += 1
-            leaderboard[strategy_b['name']]['losses'] += 1
+            A['wins'] += 1
+            B['losses'] += 1
         elif pair_winner == 'B':
-            leaderboard[strategy_b['name']]['wins'] += 1
-            leaderboard[strategy_a['name']]['losses'] += 1
-        elif pair_winner == 'Draw':
-            leaderboard[strategy_a['name']]['draws'] += 1
-            leaderboard[strategy_b['name']]['draws'] += 1
+            B['wins'] += 1
+            A['losses'] += 1
         else:
-            leaderboard[strategy_a['name']]['losses'] += 1
-            leaderboard[strategy_b['name']]['losses'] += 1
+            A['draws'] += 1
+            B['draws'] += 1
 
-        # Remember the first failure reason per strategy so the page can name it and say why.
-        for r in pair_mode_results:
-            if r.get('error') and r.get('error_player') in ('A', 'B'):
-                culprit = strategy_a['name'] if r['error_player'] == 'A' else strategy_b['name']
-                runtime_errors.setdefault(culprit, r['error'])
-
-        # Store result (using the last mode's details or a summary)
-        match_result = {
+        results.append({
             'player_a': strategy_a['name'],
             'player_b': strategy_b['name'],
             'a_points': avg_a_points,
             'b_points': avg_b_points,
-            'winner': pair_winner or 'None (both failed)',
-            'mode_results': pair_mode_results
-        }
-        
-        # Propagate error information if present in any mode result
-        for mode_result in pair_mode_results:
-            if 'error' in mode_result:
-                match_result['error'] = mode_result['error']
-                match_result['error_type'] = mode_result.get('error_type', 'Exception')
-                match_result['error_player'] = mode_result.get('error_player', 'Unknown')
-                match_result['terminated_early'] = mode_result.get('terminated_early', True)
-                break
-        
-        results.append(match_result)
-    
+            'winner': pair_winner,
+            'mode_results': pair_mode_results,
+        })
+
     # Calculate percentages and prepare leaderboard
     # Max average point per round is max payoff (e.g. 5)
     if payoff_matrix:
@@ -1926,22 +1925,24 @@ def round_robin_tournament(strategies, rounds=200, payoff_matrix=None, modes=Non
             'norm_cooperation_percentage': norm_coop_percentage,      # Normalized % for scoring
             'points_percentage': points_percentage,
             'weighted_score': stats['total_points'],  # Default to points for initial sort
-            'error': runtime_errors.get(name),
+            'submitted_at': submitted_at.get(name),
         }
         enhanced_leaderboard.append(enhanced_entry)
-    
-    # Sort leaderboard by total points (descending)
-    sorted_leaderboard = sorted(
-        enhanced_leaderboard,
-        key=lambda x: x['total_points'],
-        reverse=True
-    )
-    
+
+    # Order by the chosen ranking (default: the itinerary's "highest total points wins").
+    ranking = normalize_ranking(ranking, '1v1')
+    sorted_leaderboard = rank_entries(enhanced_leaderboard, ranking, '1v1')
+
     return {
         'leaderboard': sorted_leaderboard,
-        'matches': results,
-        'total_matches': len(strategy_pairs),
-        'runtime_errors': [{'name': n, 'reason': r} for n, r in runtime_errors.items()],
+        # Counted matches first, then the void ones (shown greyed out, "not counted").
+        'matches': results + void_matches,
+        'total_matches': len(results),
+        'ranking': ranking,
+        'ranking_text': describe_ranking(ranking, '1v1'),
+        # Every strategy left out of the ranking, with why: safety check or failed during the run.
+        'disqualified': disqualified_strategies,
+        'runtime_errors': list(runtime_dq.values()),
     }
 
 
@@ -2049,7 +2050,7 @@ def run_tournament():
         tournament_result = round_robin_tournament(
             strategies, rounds, payoff_matrix, modes=modes,
             discount_factor=discount_factor, stochastic_prob=stochastic_prob,
-            seed=seed,
+            seed=seed, ranking=data.get('ranking'),
         )
         if isolated:
             tournament_result['flags'] = screen_flags
@@ -2241,7 +2242,8 @@ def nplayer_tournament():
             compiled_strategies.append({
                 'name': name,
                 'code': code,
-                'func': strategy_func
+                'func': strategy_func,
+                'submitted_at': strategy.get('submitted_at'),
             })
         except Exception as e:
             return jsonify({'error': f'Failed to compile strategy "{name}": {str(e)}'}), 400
@@ -2271,6 +2273,7 @@ def nplayer_tournament():
             modes=modes,
             discount_factor=discount_factor,
             stochastic_prob=stochastic_prob,
+            ranking=data.get('ranking'),
         )
         
         # If admin requested persistence, save to Firestore
@@ -2427,7 +2430,8 @@ def parse_payoff_model(config):
 
 
 def _run_core_simulation(strategies, *, num_cores, scheduler, core_assignment_mode,
-                         core_sim_seed, unlimited=False, runs=1, num_processes=50, warmup=0.0):
+                         core_sim_seed, unlimited=False, runs=1, num_processes=50, warmup=0.0,
+                         ranking=None):
     """Run the OS simulation on exactly the supplied strategies, returning result/config blocks.
 
     No screening / top-K selection: the user's submitted strategies *are* the pool.
@@ -2439,18 +2443,19 @@ def _run_core_simulation(strategies, *, num_cores, scheduler, core_assignment_mo
 
     core_simulation_results = None
     core_simulation_heterogeneous = None
-    pool = [{'name': s['name'], 'code': s['code']} for s in strategies]
+    pool = [{'name': s['name'], 'code': s['code'], 'submitted_at': s.get('submitted_at')}
+            for s in strategies]
     try:
         if core_assignment_mode == 'heterogeneous':
             core_simulation_heterogeneous = run_heterogeneous_simulation(
                 pool, num_cores=num_cores, seed=core_sim_seed, scheduler=scheduler,
                 max_combinations=MAX_COMBINATIONS,
                 time_budget_s=OS_SIM_TIME_BUDGET_S, unlimited=unlimited,
-                runs=runs, num_processes=num_processes, warmup=warmup)
+                runs=runs, num_processes=num_processes, warmup=warmup, ranking=ranking)
         else:
             core_simulation_results = run_full_simulation(
                 pool, num_cores=num_cores, seed=core_sim_seed, scheduler=scheduler,
-                runs=runs, num_processes=num_processes, warmup=warmup)
+                runs=runs, num_processes=num_processes, warmup=warmup, ranking=ranking)
     except Exception as sim_error:
         app.logger.error(f"Core Simulation Error: {sim_error}")
         core_simulation_results = {'error': str(sim_error)}
@@ -2491,17 +2496,24 @@ def _run_core_simulation(strategies, *, num_cores, scheduler, core_assignment_mo
                 layout = [d['strategy_name'] for d in combo['assignment_details']]
                 traces.extend(_layout_traces(layout, ' + '.join(layout)))
         else:
-            for s in pool[:TRACE_LAYOUT_CAP]:
-                traces.extend(_layout_traces([s['name']] * num_cores, s['name']))
+            # Trace the top-ranked strategies; disqualified ones have no timeline.
+            ranked_names = (core_simulation_results or {}).get('order') or []
+            for name in ranked_names[:TRACE_LAYOUT_CAP]:
+                traces.extend(_layout_traces([name] * num_cores, name))
     except Exception as trace_error:
         app.logger.error(f"Core trace error: {trace_error}")
 
+    _dq = list(((core_simulation_results or {}).get('errors') or [])
+               + ((core_simulation_heterogeneous or {}).get('errors') or []))
+    _dq_names = {d['name'] for d in _dq}
     core_simulation_config = {
         'simulate_cores': True,
         'num_cores': num_cores,
         'scheduler': scheduler,
         'core_assignment_mode': core_assignment_mode,
-        'selected_strategies': [s['name'] for s in pool],
+        # Only the strategies still in the ranking; disqualified ones are listed separately.
+        'selected_strategies': [s['name'] for s in pool if s['name'] not in _dq_names],
+        'disqualified': _dq,
         'runs': runs,
         'num_processes': num_processes,
         'warmup': warmup,
@@ -2519,7 +2531,7 @@ def _run_core_simulation(strategies, *, num_cores, scheduler, core_assignment_mo
 
 def run_standalone_core_simulation(strategies, *, num_cores, scheduler,
                                    core_assignment_mode, seed, unlimited=False,
-                                   runs=1, num_processes=50, warmup=0.0):
+                                   runs=1, num_processes=50, warmup=0.0, ranking=None):
     """Run the OS core simulation on its own (no tournament needed).
 
     Runs on exactly the supplied strategies — no screening, no top-K. Returns the three
@@ -2528,7 +2540,7 @@ def run_standalone_core_simulation(strategies, *, num_cores, scheduler,
     return _run_core_simulation(
         strategies, num_cores=num_cores, scheduler=scheduler,
         core_assignment_mode=core_assignment_mode, core_sim_seed=seed, unlimited=unlimited,
-        runs=runs, num_processes=num_processes, warmup=warmup)
+        runs=runs, num_processes=num_processes, warmup=warmup, ranking=ranking)
 
 
 @app.route('/os-simulation', methods=['POST'])
@@ -2636,7 +2648,7 @@ def os_simulation():
         result = run_standalone_core_simulation(
             clean, num_cores=num_cores, scheduler=scheduler,
             core_assignment_mode=core_assignment_mode, seed=seed, unlimited=unlimited,
-            runs=runs, num_processes=num_processes, warmup=warmup)
+            runs=runs, num_processes=num_processes, warmup=warmup, ranking=data.get('ranking'))
         if isolated:
             result['flags'] = screen_flags
             result['screened'] = True
@@ -2810,7 +2822,8 @@ def _run_nplayer_tournament_core(config):
         stochastic_prob=stochastic_prob,
     )
 
-    weighted_leaderboard, weighted_winner = determine_weighted_results(result.get('leaderboard', []), weights)
+    weighted_leaderboard, weighted_winner = determine_weighted_results(result.get('leaderboard', []), weights,
+                                                                        mode='nplayer')
 
     # Build seed_info for reproducibility
     seed_info = None
@@ -2895,8 +2908,10 @@ def _run_nplayer_tournament_core(config):
 
 
 
-def determine_weighted_results(leaderboard, weights):
-    """Calculate weighted scores and return sorted leaderboard and winner"""
+def determine_weighted_results(leaderboard, weights, ranking=None, mode='1v1'):
+    """Add the weighted score to each entry, then order by ``ranking`` (default: the itinerary's
+    total points). Returns (sorted leaderboard, winner name)."""
+    weights = weights or {}
     if not leaderboard:
         return [], "No participants"
     
@@ -2927,8 +2942,7 @@ def determine_weighted_results(leaderboard, weights):
         entry_with_score['weighted_score'] = weighted_score
         weighted_leaderboard.append(entry_with_score)
     
-    # Sort by weighted score descending
-    sorted_leaderboard = sorted(weighted_leaderboard, key=lambda x: x['weighted_score'], reverse=True)
+    sorted_leaderboard = rank_entries(weighted_leaderboard, ranking, mode)
     
     # Winner is the first entry
     winner = sorted_leaderboard[0]['name'] if sorted_leaderboard else "No participants"

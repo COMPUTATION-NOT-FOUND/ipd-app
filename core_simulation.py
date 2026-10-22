@@ -8,6 +8,7 @@ from schedulers import build_scheduler
 from n_player_simulation import (call_strategy, run_with_limit, validate_move,
                                  describe_strategy_error, InstructionLimitExceeded,
                                  EngineTraceError, release_tracer)
+from ranking import normalize_ranking, rank_entries, describe_ranking
 
 
 class StrategyRuntimeError(Exception):
@@ -753,7 +754,7 @@ def run_baseline_simulation(num_cores=2, seed=None, scheduler='round_robin', run
 
 
 def run_full_simulation(strategies_data, num_cores=2, seed=None, scheduler='round_robin',
-                        runs=1, num_processes=FULL_PROCESS_COUNT, warmup=0.0):
+                        runs=1, num_processes=FULL_PROCESS_COUNT, warmup=0.0, ranking=None):
     """HOMOGENEOUS: benchmark each strategy replicated across all N cores.
 
     Each strategy (and the baseline) is run on the same `runs` seeds and the metrics averaged,
@@ -776,7 +777,16 @@ def run_full_simulation(strategies_data, num_cores=2, seed=None, scheduler='roun
         except StrategyRuntimeError as e:
             errors.append({'name': name, 'reason': e.reason})
             continue
-        strategies[name] = {'workloads': per_wl, 'avg': avg, 'coop_rate': avg.get('coop_rate', 0.0)}
+        strategies[name] = {'workloads': per_wl, 'avg': avg, 'coop_rate': avg.get('coop_rate', 0.0),
+                            'submitted_at': strat.get('submitted_at')}
+
+    # Order by the chosen ranking (default: the itinerary's "lowest average response time wins").
+    # The dict is rebuilt in ranked order and each entry carries its rank.
+    ranking = normalize_ranking(ranking, 'os')
+    rows = [{'name': n, 'submitted_at': v.get('submitted_at'), **v['avg']} for n, v in strategies.items()]
+    ranked = rank_entries(rows, ranking, 'os')
+    strategies = {r['name']: {**strategies[r['name']], 'rank': r['rank'], 'rank_label': r['rank_label']}
+                  for r in ranked}
 
     baseline = run_baseline_simulation(num_cores=num_cores, scheduler=scheduler, seeds=seeds,
                                        num_processes=num_processes, warmup=warmup)
@@ -786,6 +796,9 @@ def run_full_simulation(strategies_data, num_cores=2, seed=None, scheduler='roun
         'num_cores': num_cores,
         'baseline': baseline,
         'strategies': strategies,
+        'order': list(strategies),
+        'ranking': ranking,
+        'ranking_text': describe_ranking(ranking, 'os'),
         'errors': errors,
         **_overload_info(baseline),
         **_run_info(seeds, num_processes, warmup),
@@ -808,7 +821,8 @@ def _het_summary(m):
 def run_heterogeneous_simulation(strategies_data, num_cores=2, seed=None,
                                  scheduler='round_robin', max_combinations=None,
                                  time_budget_s=None, unlimited=False,
-                                 runs=1, num_processes=FULL_PROCESS_COUNT, warmup=0.0):
+                                 runs=1, num_processes=FULL_PROCESS_COUNT, warmup=0.0,
+                                 ranking=None):
     """HETEROGENEOUS: each strategy used at most once.
 
     Enumerates itertools.combinations(strategies, num_cores) — no replacement — runs each mixture
@@ -872,9 +886,11 @@ def run_heterogeneous_simulation(strategies_data, num_cores=2, seed=None,
 
     results = []
     elapsed = 0.0
+    covered = 0   # mixtures run or ruled out (by a disqualified member): how much of the space was seen
     for combo in combos:
         # A strategy that already failed is disqualified, so skip every mixture containing it.
         if any(names[i] in errors for i in combo):
+            covered += 1
             continue
         # Stop before starting a combination the running average says would overrun the budget.
         # `results` is checked so at least one always runs: a budget smaller than a single
@@ -884,6 +900,7 @@ def run_heterogeneous_simulation(strategies_data, num_cores=2, seed=None,
             if elapsed + avg > budget:
                 break
         started = time.perf_counter()
+        covered += 1
         core_strategies = [funcs[i] for i in combo]
         assignment_details = [
             {'core_index': ci, 'strategy_name': names[combo[ci]]} for ci in range(num_cores)
@@ -912,7 +929,12 @@ def run_heterogeneous_simulation(strategies_data, num_cores=2, seed=None,
     if errors:
         results = [r for r in results
                    if not any(d['strategy_name'] in errors for d in r['assignment_details'])]
-    results.sort(key=lambda r: r['throughput'], reverse=True)
+    # Mixtures use short metric names (response, wait_time, ...); map the catalog names onto them.
+    ranking = normalize_ranking(ranking, 'os')
+
+    def _het_get(row, metric):
+        return row.get(_HET_NAMES.get(metric, metric))
+    results = rank_entries(results, ranking, 'os', get=_het_get)
     baseline_result = run_baseline_simulation(num_cores=num_cores, scheduler=scheduler, seeds=seeds,
                                               num_processes=num_processes, warmup=warmup)
     return {
@@ -922,10 +944,12 @@ def run_heterogeneous_simulation(strategies_data, num_cores=2, seed=None,
         'strategy_count': k,
         'total_combinations': total,
         'evaluated': len(results),
+        'ranking': ranking,
+        'ranking_text': describe_ranking(ranking, 'os'),
         # Consumers must be able to tell a complete sweep from a sample: the top-ranked mixture is
         # only provably the best when sampled is False. `seed` is reported because it selects
         # *which* subset was drawn, so a sampled run can be reproduced exactly.
-        'sampled': len(results) < total,
+        'sampled': covered < total,
         'elapsed_seconds': round(elapsed, 3),
         'baseline': baseline_result,
         'results': results,

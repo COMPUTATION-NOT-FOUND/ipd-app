@@ -38,7 +38,13 @@ def test_enumerates_all_combinations_without_replacement():
         assert len(r['assignment_details']) == 3
         assert all(count == 1 for count in r['combination'].values())
         assert len(r['combination']) == 3
-    # Ranked by throughput descending
+    # Ranked by the itinerary default: lowest average response time first
+    resp = [r['response'] for r in res['results']]
+    assert resp == sorted(resp)
+    assert [r['rank'] for r in res['results']] == [1, 2, 3, 4]
+    # ...and by throughput when the ranking asks for it
+    res = run_heterogeneous_simulation(STRATS, num_cores=3, seed=7,
+                                       ranking={'metric': 'throughput', 'direction': 'desc'})
     tps = [r['throughput'] for r in res['results']]
     assert tps == sorted(tps, reverse=True)
 

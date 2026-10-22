@@ -4,7 +4,10 @@ Regression tests for the student bug-test reports (Oct 2026):
 * B2  -- a strategy returning anything other than exactly 'C' / 'D' was silently counted as
          cooperation in 1v1, N-Player, the OS simulation and Hub screening.
 * B5  -- a strategy that crashed or hit the instruction cap in round 1 scored 0-0 and the match
-         was counted as a DRAW, so the broken strategy lost nothing. It now forfeits.
+         was counted as a DRAW, so the broken strategy lost nothing.
+* Disqualification (Oct 2026, second report) -- a strategy that fails at any point is now
+         DISQUALIFIED: removed from the leaderboard, and every match it played is thrown out, so
+         nobody gains or loses points from having met it.
 * Lone N-Player group -- with 3 strategies and group size 2 the leftover player sat alone in a
          group and was credited an automatic win.
 """
@@ -62,22 +65,38 @@ class TestOneVsOne:
         assert result['error_type'] == 'InvalidMove'
         assert 'returned 1' in result['error']
 
-    def test_crashing_strategy_forfeits_instead_of_drawing(self):
+    def test_crashing_strategy_is_disqualified(self):
         result = round_robin_tournament(
-            [{'name': 'tft', 'code': TFT}, {'name': 'loops', 'code': LOOPS}], rounds=20)
-        by_name = {e['name']: e for e in result['leaderboard']}
-        assert (by_name['tft']['wins'], by_name['tft']['draws']) == (1, 0)
-        assert (by_name['loops']['losses'], by_name['loops']['draws']) == (1, 0)
-        assert 'instruction limit' in by_name['loops']['error']
-        assert by_name['tft']['error'] is None
-        assert result['runtime_errors'] == [{'name': 'loops', 'reason': by_name['loops']['error']}]
+            [{'name': 'tft', 'code': TFT}, {'name': 'loops', 'code': LOOPS},
+             {'name': 'all_d', 'code': ALL_D}], rounds=20)
+        assert sorted(e['name'] for e in result['leaderboard']) == ['all_d', 'tft']
+        dq = {d['name']: d for d in result['disqualified']}
+        assert list(dq) == ['loops']
+        assert 'instruction limit' in dq['loops']['reason']
+        assert dq['loops']['stage'] == 'during the run'
+        # Its match is kept for display, marked void, and not counted.
+        void = [m for m in result['matches'] if m.get('void')]
+        assert len(void) == 1 and 'loops' in (void[0]['player_a'], void[0]['player_b'])
+        assert result['total_matches'] == 1
 
-    def test_invalid_return_forfeits_against_every_opponent(self):
-        result = round_robin_tournament(
+    def test_opponents_score_as_if_it_never_entered(self):
+        with_bad = round_robin_tournament(
             [{'name': 'tft', 'code': TFT}, {'name': 'bad', 'code': RETURNS_ONE},
              {'name': 'all_d', 'code': ALL_D}], rounds=10)
-        bad = next(e for e in result['leaderboard'] if e['name'] == 'bad')
-        assert (bad['wins'], bad['draws'], bad['losses']) == (0, 0, 2)
+        without = round_robin_tournament(
+            [{'name': 'tft', 'code': TFT}, {'name': 'all_d', 'code': ALL_D}], rounds=10)
+        keys = ('total_points', 'wins', 'draws', 'losses', 'cooperates', 'total_moves')
+
+        def strip(lb):
+            return {e['name']: tuple(e[k] for k in keys) for e in lb}
+        assert strip(with_bad['leaderboard']) == strip(without['leaderboard'])
+
+    def test_only_two_strategies_and_one_fails_still_shows_why(self):
+        result = round_robin_tournament(
+            [{'name': 'tft', 'code': TFT}, {'name': 'bad', 'code': RETURNS_ONE}], rounds=10)
+        assert result['leaderboard'] == []
+        assert 'disqualified' in result['error']
+        assert result['matches'][0]['void'] and 'returned 1' in result['matches'][0]['error']
 
     def test_hub_screen_rejects_invalid_return(self, client):
         resp = client.post('/hub/screen', json={'name': 'bad', 'code': RETURNS_ONE})
@@ -101,22 +120,28 @@ class TestNPlayer:
         assert result['rounds_played'] == 0
         assert sum(result['coop_counts_by_player'].values()) == 0
 
-    def test_failing_player_forfeits_and_others_are_ranked(self):
+    def test_failing_player_is_disqualified_and_group_replayed(self):
         result = group_tournament(
             [_compiled('all_c', ALL_C), _compiled('loops', LOOPS), _compiled('all_d', ALL_D)],
             rounds=10, seed=1, payoff_model=PUBLIC_GOODS)
-        by_name = {e['name']: e for e in result['leaderboard']}
-        assert (by_name['loops']['wins'], by_name['loops']['draws'], by_name['loops']['losses']) == (0, 0, 1)
-        assert by_name['loops']['errors'] and 'instruction limit' in by_name['loops']['errors'][0]
-        assert [e['name'] for e in result['runtime_errors']] == ['loops']
-        assert result['matches'][0]['errors'][0]['name'] == 'loops'
+        assert sorted(e['name'] for e in result['leaderboard']) == ['all_c', 'all_d']
+        assert [d['name'] for d in result['disqualified']] == ['loops']
+        assert 'instruction limit' in result['disqualified'][0]['reason']
+        assert result['matches'][0]['disqualified'][0]['name'] == 'loops'
+        # The others get a full, clean match: same scores as if 'loops' never entered.
+        clean = group_tournament([_compiled('all_c', ALL_C), _compiled('all_d', ALL_D)],
+                                 rounds=10, seed=1, payoff_model=PUBLIC_GOODS)
+
+        def pts(r):
+            return {e['name']: e['total_points'] for e in r['leaderboard']}
+        assert pts(result) == pts(clean)
+        assert result['matches'][0]['results']['rounds_played'] == 10
 
     def test_no_error_fields_on_a_clean_run(self):
         result = group_tournament([_compiled('tft', TFT), _compiled('all_d', ALL_D)],
                                   rounds=10, seed=1, payoff_model=PUBLIC_GOODS)
-        assert result['runtime_errors'] == []
-        assert all(e['errors'] == [] for e in result['leaderboard'])
-        assert 'errors' not in result['matches'][0]
+        assert result['runtime_errors'] == [] and result['disqualified'] == []
+        assert 'disqualified' not in result['matches'][0]
 
 
 class TestLonePlayerMerge:

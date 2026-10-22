@@ -15,6 +15,7 @@ from typing import Callable, Any
 # and the same tracer (see instruction_limit.py for why the tracer is never switched off per call).
 from instruction_limit import (InstructionLimitExceeded, EngineTraceError,  # noqa: F401  (re-exported)
                                MAX_STRATEGY_INSTRUCTIONS, run_with_limit, release_tracer)
+from ranking import normalize_ranking, rank_entries, describe_ranking
 
 
 class InvalidMove(ValueError):
@@ -307,6 +308,43 @@ def game_n(
     return result
 
 
+def _play_group(group_strategies, *, group_idx, active_modes, legacy_mode, modes, seed, rounds,
+                payoff_model, weights, discount_factor, stochastic_prob, fixed_random_rounds):
+    """Play one group in every mode. Returns (per_mode_results, errored) where ``errored`` maps
+    a local player index to its failure reason; on a failure the remaining modes are skipped."""
+    tournament_info_base = {
+        'format': 'n_player',
+        'mode': legacy_mode,
+        'modes': active_modes,
+        'n_players': len(group_strategies),
+        'group_index': group_idx,
+        'weights': weights,
+    }
+    per_mode_results = {}
+    errored = {}
+    for mode_idx, mode_name in enumerate(active_modes):
+        match_seed = None
+        if seed is not None:
+            # modes=None keeps the legacy per-group seed
+            match_seed = seed + group_idx * 10000 + (0 if modes is None else mode_idx)
+        match_result = game_n(
+            strategies=group_strategies,
+            rounds=rounds,
+            payoff_model=payoff_model,
+            seed=match_seed,
+            tournament_info={**tournament_info_base, 'mode': mode_name},
+            mode=mode_name,
+            discount_factor=discount_factor,
+            stochastic_prob=stochastic_prob,
+            fixed_random_rounds=fixed_random_rounds,
+        )
+        per_mode_results[mode_name] = match_result
+        if match_result.get('error_player') is not None:
+            errored[match_result['error_player']] = match_result.get('error', '')
+            break
+    return per_mode_results, errored
+
+
 def group_tournament(
     strategies,
     rounds,
@@ -319,6 +357,7 @@ def group_tournament(
     discount_factor: float = 0.95,
     stochastic_prob: float = 0.995,
     fixed_random_rounds: int | None = None,
+    ranking=None,
 ):
     """
     Run N-player tournament with one or more group matches.
@@ -418,7 +457,6 @@ def group_tournament(
             'mode_cooperates': {m: 0 for m in active_modes},
             'mode_defects': {m: 0 for m in active_modes},
             'mode_total_moves': {m: 0 for m in active_modes},
-            'errors': [],
         }
         for i in range(n_strategies)
     }
@@ -426,27 +464,45 @@ def group_tournament(
     # Track all matches
     all_matches = []
     
+    # Strategies that failed (crash, instruction cap, a move other than 'C'/'D'). Global index ->
+    # reason. A failed strategy is DISQUALIFIED: it leaves the leaderboard, and its group is
+    # replayed without it (same seed) so the others are not cut short or scored against it.
+    disqualified = {}
+
     # Run matches for each group
     for group_idx, group_indices in enumerate(groups):
-        # Extract strategy functions for this group
-        group_strategies = [
-            strategies[i].get('func') or strategies[i].get('code')
-            for i in group_indices
-        ]
+        members = list(group_indices)
+        while True:
+            per_mode_results, errored = _play_group(
+                [strategies[i].get('func') or strategies[i].get('code') for i in members],
+                group_idx=group_idx, active_modes=active_modes, legacy_mode=legacy_mode,
+                modes=modes, seed=seed, rounds=rounds, payoff_model=payoff_model,
+                weights=weights, discount_factor=discount_factor,
+                stochastic_prob=stochastic_prob,
+                fixed_random_rounds=tournament_fixed_random_rounds,
+            )
+            if not errored:
+                break
+            for local_idx, reason in errored.items():
+                disqualified.setdefault(members[local_idx], reason)
+            members = [g for j, g in enumerate(members) if j not in errored]
+            if len(members) < 2:
+                break   # nobody left to play against: the group is void
 
-        # Build base tournament info (strategy-visible)
-        tournament_info_base = {
-            'format': 'n_player',
-            'mode': legacy_mode,
-            'modes': active_modes,
-            'n_players': len(group_indices),
-            'group_index': group_idx,
-            'weights': weights,
-        }
+        if errored or len(members) < 2:
+            # Void group (fewer than two strategies survived): nothing is scored.
+            all_matches.append({
+                'group_index': group_idx,
+                'players': [strategies[i]['name'] for i in members],
+                'player_indices': members,
+                'results': None,
+                'void': True,
+                'disqualified': [{'name': strategies[i]['name'], 'reason': disqualified[i]}
+                                 for i in group_indices if i in disqualified],
+            })
+            continue
 
-        # Run one N-player match per mode and aggregate
-        per_mode_results: dict[str, dict] = {}
-        n_local = len(group_indices)
+        n_local = len(members)
         points_sum = [0.0] * n_local
         coop_sum = [0] * n_local
         defect_sum = [0] * n_local
@@ -455,37 +511,10 @@ def group_tournament(
         # Per-mode cooperation ratio (one entry per mode this match actually played)
         coop_ratio_sum = [0.0] * n_local
         coop_ratio_count = [0] * n_local
-        # Local index -> reason, for players whose strategy failed in any mode of this match.
-        # A failing player forfeits: it is recorded as a loss and can't win or draw.
-        errored = {}
 
-        for mode_idx, mode_name in enumerate(active_modes):
-            # Generate deterministic sub-seed for this match
-            match_seed = None
-            if seed is not None:
-                if modes is None:
-                    # Preserve legacy deterministic behavior
-                    match_seed = seed + group_idx * 10000
-                else:
-                    match_seed = seed + group_idx * 10000 + mode_idx
-
-            match_result = game_n(
-                strategies=group_strategies,
-                rounds=rounds,
-                payoff_model=payoff_model,
-                seed=match_seed,
-                tournament_info={**tournament_info_base, 'mode': mode_name},
-                mode=mode_name,
-                discount_factor=discount_factor,
-                stochastic_prob=stochastic_prob,
-                fixed_random_rounds=tournament_fixed_random_rounds,
-            )
-
-            per_mode_results[mode_name] = match_result
+        for mode_name in active_modes:
+            match_result = per_mode_results[mode_name]
             rounds_played = int(match_result.get('rounds_played', 0) or 0)
-            if match_result.get('error_player') is not None:
-                errored.setdefault(match_result['error_player'], match_result.get('error', ''))
-
             for local_idx in range(n_local):
                 pts = float(match_result['total_points_by_player'][local_idx])
                 player_coops = int(match_result['coop_counts_by_player'][local_idx])
@@ -501,8 +530,7 @@ def group_tournament(
                     coop_ratio_count[local_idx] += 1
 
                 # Per-mode breakdown (parity with 1v1's mode_points/mode_stats).
-                gidx = group_indices[local_idx]
-                ld = leaderboard_data[gidx]
+                ld = leaderboard_data[members[local_idx]]
                 ld['mode_points_sum'][mode_name] += (pts / rounds_played) if rounds_played > 0 else 0.0
                 ld['mode_matches'][mode_name] += 1
                 ld['mode_cooperates'][mode_name] += player_coops
@@ -513,67 +541,59 @@ def group_tournament(
         avg_points = [p / denom for p in points_sum]
         avg_points_per_round = [p / denom for p in points_per_round_sum]
 
-        # Determine winner(s) in this group based on averaged points. Players whose strategy
-        # failed are out of contention (they forfeit), so the winner comes from the rest.
-        contenders = [i for i in range(n_local) if i not in errored]
-        max_points = max((avg_points[i] for i in contenders), default=0.0)
+        # Determine winner(s) in this group based on averaged points.
+        max_points = max(avg_points, default=0.0)
         eps = 1e-12
-        top_players = [i for i in contenders if abs(avg_points[i] - max_points) <= eps]
+        top_players = [i for i in range(n_local) if abs(avg_points[i] - max_points) <= eps]
 
         # Update leaderboard data for each player in this group
-        for local_idx, global_idx in enumerate(group_indices):
-            leaderboard_data[global_idx]['total_points'] += avg_points[local_idx]
-            leaderboard_data[global_idx]['cooperates'] += coop_sum[local_idx]
-            leaderboard_data[global_idx]['defects'] += defect_sum[local_idx]
-            leaderboard_data[global_idx]['total_moves'] += moves_sum[local_idx]
-            leaderboard_data[global_idx]['matches_played'] += 1
-            leaderboard_data[global_idx]['avg_points_per_round_sum'] += avg_points_per_round[local_idx]
-            leaderboard_data[global_idx]['mode_coop_ratio_sum'] += coop_ratio_sum[local_idx]
-            leaderboard_data[global_idx]['mode_coop_ratio_count'] += coop_ratio_count[local_idx]
-
-            if local_idx in errored:
-                leaderboard_data[global_idx]['errors'].append(errored[local_idx])
-
+        for local_idx, global_idx in enumerate(members):
+            ld = leaderboard_data[global_idx]
+            ld['total_points'] += avg_points[local_idx]
+            ld['cooperates'] += coop_sum[local_idx]
+            ld['defects'] += defect_sum[local_idx]
+            ld['total_moves'] += moves_sum[local_idx]
+            ld['matches_played'] += 1
+            ld['avg_points_per_round_sum'] += avg_points_per_round[local_idx]
+            ld['mode_coop_ratio_sum'] += coop_ratio_sum[local_idx]
+            ld['mode_coop_ratio_count'] += coop_ratio_count[local_idx]
             if local_idx in top_players:
                 if len(top_players) == 1:
-                    leaderboard_data[global_idx]['wins'] += 1
+                    ld['wins'] += 1
                 else:
-                    leaderboard_data[global_idx]['draws'] += 1
+                    ld['draws'] += 1
             else:
-                leaderboard_data[global_idx]['losses'] += 1
+                ld['losses'] += 1
 
         # Record match details
         if len(active_modes) == 1:
             match_payload = per_mode_results[active_modes[0]]
         else:
-            first_mode = active_modes[0] if active_modes else None
-            single_mode_rounds_played = 0
-            if first_mode is not None:
-                single_mode_rounds_played = int(per_mode_results.get(first_mode, {}).get('rounds_played', 0) or 0)
+            first_mode = active_modes[0]
             match_payload = {
                 'players': list(range(n_local)),
                 'total_points_by_player': {i: avg_points[i] for i in range(n_local)},
                 'coop_counts_by_player': {i: coop_sum[i] for i in range(n_local)},
                 'defect_counts_by_player': {i: defect_sum[i] for i in range(n_local)},
-                'rounds_played': single_mode_rounds_played,
+                'rounds_played': int(per_mode_results[first_mode].get('rounds_played', 0) or 0),
                 'rounds_played_by_mode': {m: r.get('rounds_played', 0) for m, r in per_mode_results.items()},
                 'mode_results': per_mode_results,
-                'match_complete': True,
+                'match_complete': all(r.get('match_complete', True) for r in per_mode_results.values()),
             }
 
         match_record = {
             'group_index': group_idx,
-            'players': [strategies[i]['name'] for i in group_indices],
-            'player_indices': group_indices,
+            'players': [strategies[i]['name'] for i in members],
+            'player_indices': members,
             'results': match_payload,
         }
-        if errored:
-            match_record['errors'] = [
-                {'name': strategies[group_indices[i]]['name'], 'reason': reason}
-                for i, reason in sorted(errored.items())
+        removed = [i for i in group_indices if i in disqualified]
+        if removed:
+            match_record['disqualified'] = [
+                {'name': strategies[i]['name'], 'reason': disqualified[i]} for i in removed
             ]
         all_matches.append(match_record)
-    
+
     # Calculate percentages and prepare leaderboard
     leaderboard = []
     
@@ -598,6 +618,8 @@ def group_tournament(
         max_round_points = 5.0
     
     for player_idx in range(n_strategies):
+        if player_idx in disqualified:
+            continue
         data = leaderboard_data[player_idx]
         
         # Calculate cooperation percentage
@@ -664,22 +686,26 @@ def group_tournament(
             'total_moves': data['total_moves'],
             'mode_points': mode_points,
             'mode_stats': mode_stats,
-            'errors': data['errors'],
+            'submitted_at': strategies[player_idx].get('submitted_at'),
         })
 
-    # Sort leaderboard by total points descending
-    leaderboard.sort(key=lambda x: x['total_points'], reverse=True)
-    
-    # Build result
-    # One entry per failing strategy (first reason), so the page can name it and say why.
+    # Order by the chosen ranking (default: the itinerary's "highest total points wins").
+    ranking = normalize_ranking(ranking, 'nplayer')
+    leaderboard = rank_entries(leaderboard, ranking, 'nplayer')
+
+    # Every disqualified strategy with why, so the page can list them apart from the ranking.
     runtime_errors = [
-        {'name': e['name'], 'reason': e['errors'][0]} for e in leaderboard if e['errors']
+        {'name': strategies[i]['name'], 'reason': reason, 'error': reason, 'stage': 'during the run'}
+        for i, reason in sorted(disqualified.items())
     ]
 
     result = {
         'leaderboard': leaderboard,
         'matches': all_matches,
         'runtime_errors': runtime_errors,
+        'disqualified': runtime_errors,
+        'ranking': ranking,
+        'ranking_text': describe_ranking(ranking, 'nplayer'),
         'tournament_info': {
             'format': 'n_player',
             'mode': legacy_mode,
