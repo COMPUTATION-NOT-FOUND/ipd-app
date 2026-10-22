@@ -88,18 +88,23 @@
         <div class="gi-content">
             <ul>
                 <li><strong>1v1</strong> — round-robin: every strategy plays every other in a separate
-                    two-player match. Scored by the weighted score below.</li>
+                    two-player match. Ranked by <strong>total points</strong> (highest first).</li>
                 <li><strong>N-Player</strong> — one group match where everyone moves at the same time each
-                    round. Also scored by the weighted score.</li>
+                    round. Also ranked by <strong>total points</strong> (highest first).</li>
                 <li><strong>OS Simulation</strong> — a standalone benchmark scored on scheduling metrics
-                    (throughput, wait, turnaround, response, cache misses), <em>not</em> the weighted score.</li>
+                    (throughput, wait, turnaround, response, cache misses). Ranked by <strong>average response
+                    time</strong> (lowest first): how long a task waits before it first gets the CPU.</li>
             </ul>
+            <p>Each results table says what it is ranked by. When two strategies tie, they are split by
+                wins, then cooperation % (OS Simulation: waiting time, then throughput), then by who
+                submitted first. If they are still equal, the earlier entry stays ahead. The admin can pick a
+                different ranking for a round, and the results page then shows that one.</p>
         </div>
     </details>
 
     <!-- ===== Scoring ===== -->
     <details class="gi-sub">
-        <summary><i class="fas fa-scale-balanced"></i> How the score is calculated (1v1 &amp; N-Player)</summary>
+        <summary><i class="fas fa-scale-balanced"></i> The weighted score (optional ranking for 1v1 &amp; N-Player)</summary>
         <div class="gi-content">
             <p>Each strategy earns three component scores, each a fraction from 0 to 1:</p>
             <ul>

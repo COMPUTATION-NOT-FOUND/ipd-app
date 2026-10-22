@@ -161,3 +161,92 @@ def rank_entries(entries, spec, mode, get=None):
         shared = sum(1 for o in out if o['rank'] == e['rank']) > 1
         e['rank_label'] = f"={e['rank']}" if shared else str(e['rank'])
     return out
+
+
+# --- Whole results (used when the website publishes a result) ------------------------------
+
+# Mixture rows from the heterogeneous OS simulation use short metric names.
+_OS_SHORT = {'avg_response': 'response', 'avg_waiting': 'wait_time', 'avg_turnaround': 'turnaround',
+             'throughput': 'throughput', 'makespan': 'makespan', 'avg_cache_misses': 'cache_misses',
+             'coop_rate': 'coop_rate'}
+
+
+def mode_for_kind(kind):
+    return {'os': 'os', 'nplayer': 'nplayer'}.get(kind, '1v1')
+
+
+def _het_get(row, metric):
+    return row.get(_OS_SHORT.get(metric, metric))
+
+
+def apply_ranking_to_result(result, kind, spec):
+    """Re-rank a stored result in place by ``spec`` and set ``ranking``, ``ranking_text`` and
+    ``winner``. Works for 1v1 / N-Player (``leaderboard``) and the OS simulation."""
+    mode = mode_for_kind(kind)
+    spec = normalize_ranking(spec, mode)
+    result['ranking'] = spec
+    result['ranking_text'] = describe_ranking(spec, mode)
+    if mode in ('1v1', 'nplayer'):
+        board = [e for e in (result.get('leaderboard') or []) if isinstance(e, dict)]
+        result['leaderboard'] = rank_entries(board, spec, mode)
+        result['winner'] = result['leaderboard'][0].get('name') if result['leaderboard'] else 'No participants'
+        return result
+    winner = None
+    homo = result.get('core_simulation_results')
+    if isinstance(homo, dict) and isinstance(homo.get('strategies'), dict):
+        strategies = homo['strategies']
+        rows = [{'name': n, 'submitted_at': (v or {}).get('submitted_at'), **((v or {}).get('avg') or {})}
+                for n, v in strategies.items()]
+        ranked = rank_entries(rows, spec, 'os')
+        homo['strategies'] = {r['name']: {**strategies[r['name']], 'rank': r['rank'],
+                                          'rank_label': r['rank_label']} for r in ranked}
+        homo['order'] = [r['name'] for r in ranked]
+        homo['ranking'] = spec
+        winner = ranked[0]['name'] if ranked else None
+    het = result.get('core_simulation_heterogeneous')
+    if isinstance(het, dict) and isinstance(het.get('results'), list):
+        het['results'] = rank_entries([r for r in het['results'] if isinstance(r, dict)], spec, 'os',
+                                      get=_het_get)
+        het['ranking'] = spec
+        if het['results'] and winner is None:
+            winner = ' + '.join((het['results'][0].get('combination') or {}).keys())
+    if winner:
+        result['winner'] = winner
+    return result
+
+
+def preview_rows(result, kind):
+    """Small JSON-safe rows (name + numbers) for a publish preview, in stored order."""
+    mode = mode_for_kind(kind)
+    keep = [k for k in METRICS[mode] if k != 'earliest_submission']
+
+    def nums(src, names):
+        out = {}
+        for k in names:
+            v = src.get(k)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                out[k] = v
+        return out
+
+    rows = []
+    if mode in ('1v1', 'nplayer'):
+        for e in result.get('leaderboard') or []:
+            if isinstance(e, dict):
+                rows.append({'name': str(e.get('name', '')), 'submitted_at': e.get('submitted_at')
+                             if isinstance(e.get('submitted_at'), str) else None,
+                             **nums(e, keep + ['draws'])})
+        return rows
+    homo = result.get('core_simulation_results') or {}
+    for n, v in (homo.get('strategies') or {}).items():
+        v = v or {}
+        rows.append({'name': str(n), 'submitted_at': v.get('submitted_at')
+                     if isinstance(v.get('submitted_at'), str) else None, **nums(v.get('avg') or {}, keep)})
+    for r in (result.get('core_simulation_heterogeneous') or {}).get('results') or []:
+        if isinstance(r, dict):
+            row = {'name': ' + '.join((r.get('combination') or {}).keys())}
+            for k in keep:
+                v = _het_get(r, k)
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    row[k] = v
+            rows.append(row)
+    return rows
