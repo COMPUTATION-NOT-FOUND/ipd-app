@@ -47,21 +47,15 @@ class CacheConfig:
             raise ValueError("Invalid associativity (must divide the cache evenly)")
 
 
-class CacheLine:
-    def __init__(self):
-        self.valid = False
-        self.tag = None
-        self.lru_counter = 0
-
-
-class CacheSet:
-    def __init__(self, associativity: int):
-        self.lines = [CacheLine() for _ in range(associativity)]
-        self.access_counter = 0
-
-
 class Cache:
-    """Set-associative cache with LRU replacement."""
+    """Set-associative cache with LRU replacement.
+
+    Each set is a short list of tags, least recently used first, created only when that set is
+    first touched. This is the same true-LRU policy as one counter per line (a hit moves the tag
+    to the end; a miss evicts the front once the set is full), so hits and misses are identical,
+    without building every set up front: an 8 MB L3 alone has 8192 sets, and a run builds a fresh
+    hierarchy per core, workload and seed.
+    """
 
     def __init__(self, config: CacheConfig, rng: random.Random):
         self.config = config
@@ -79,7 +73,11 @@ class Cache:
 
         self.offset_bits = int(math.log2(config.line_size))
         self.index_bits = int(math.log2(self.num_sets))
-        self.sets = [CacheSet(config.associativity) for _ in range(self.num_sets)]
+        self._index_mask = self.num_sets - 1
+        self._assoc = config.associativity
+        self._sets = {}                       # set index -> [tags], least recently used first
+        self._hit = (True, config.hit_latency_cycles)
+        self._miss = (False, config.hit_latency_cycles)
 
         self.hits = 0
         self.misses = 0
@@ -89,52 +87,36 @@ class Cache:
         return n > 0 and (n & (n - 1)) == 0
 
     def _get_set_index(self, address: int) -> int:
-        return (address >> self.offset_bits) & ((1 << self.index_bits) - 1)
+        return (address >> self.offset_bits) & self._index_mask
 
     def _get_tag(self, address: int) -> int:
         return (address >> self.offset_bits) >> self.index_bits
 
     def access(self, address: int) -> Tuple[bool, int]:
         """Return (hit, latency_cycles) for accessing `address`."""
-        set_index = self._get_set_index(address)
-        tag = self._get_tag(address)
-        cache_set = self.sets[set_index]
-
-        for i, line in enumerate(cache_set.lines):
-            if line.valid and line.tag == tag:
-                self.hits += 1
-                cache_set.access_counter += 1
-                line.lru_counter = cache_set.access_counter
-                return (True, self.config.hit_latency_cycles)
-
-        # Miss: evict LRU victim (or an invalid line) and install.
+        block = address >> self.offset_bits
+        tag = block >> self.index_bits
+        tags = self._sets.get(block & self._index_mask)
+        if tags is None:
+            self._sets[block & self._index_mask] = [tag]
+            self.misses += 1
+            return self._miss
+        if tag in tags:
+            if tags[-1] != tag:               # move to most recently used
+                tags.remove(tag)
+                tags.append(tag)
+            self.hits += 1
+            return self._hit
+        # Miss: evict the least recently used tag once the set is full, then install.
         self.misses += 1
-        victim_idx = self._select_victim(cache_set)
-        line = cache_set.lines[victim_idx]
-        line.valid = True
-        line.tag = tag
-        cache_set.access_counter += 1
-        line.lru_counter = cache_set.access_counter
-        return (False, self.config.hit_latency_cycles)
-
-    def _select_victim(self, cache_set: CacheSet) -> int:
-        for i, line in enumerate(cache_set.lines):
-            if not line.valid:
-                return i
-        min_counter = min(line.lru_counter for line in cache_set.lines)
-        for i, line in enumerate(cache_set.lines):
-            if line.lru_counter == min_counter:
-                return i
-        return 0
+        if len(tags) >= self._assoc:
+            del tags[0]
+        tags.append(tag)
+        return self._miss
 
     def flush(self):
         """Invalidate every line (used to model a cold cache after migration)."""
-        for cache_set in self.sets:
-            for line in cache_set.lines:
-                line.valid = False
-                line.tag = None
-                line.lru_counter = 0
-            cache_set.access_counter = 0
+        self._sets.clear()
 
     def get_stats(self) -> Dict:
         total = self.hits + self.misses
