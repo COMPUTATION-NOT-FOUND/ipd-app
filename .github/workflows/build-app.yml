@@ -31,9 +31,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      # 3.14: its tracer makes the per-move instruction cap far cheaper (1v1 runs ~8x faster than
+      # on 3.12), with byte-identical results.
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.14'
       - name: Install dependencies
         run: python -m pip install -r requirements-build.txt
       - name: Run the tests first
