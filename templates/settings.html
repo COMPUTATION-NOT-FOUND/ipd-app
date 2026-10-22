@@ -55,6 +55,21 @@
             <div id="connMsg" class="set-msg"></div>
         </div>
 
+        <!-- How many CPU cores runs may use (parallel.py). Saved to DATA_DIR/.env as IPD_WORKERS. -->
+        <div class="card" id="speed">
+            <h3><i class="fas fa-gauge-high"></i> Speed</h3>
+            <p>Big runs are split across your computer's processor cores, so they finish sooner. Results are
+            exactly the same however many cores you use. This computer has <strong>{{ cpu_count }}</strong> cores.
+            Using all but one keeps the computer responsive while a run is going.</p>
+            <div class="set-label">Cores to use for runs</div>
+            <input type="number" id="workers" class="set-field" min="1" max="{{ max_workers }}" value="{{ workers }}"
+                   style="max-width: 140px;">
+            <button id="workersBtn" class="btn-success"><i class="fas fa-floppy-disk"></i> Save</button>
+            <button id="workersDefaultBtn" class="btn-primary"><i class="fas fa-undo"></i> Default ({{ default_workers }})</button>
+            <p class="set-path" style="margin-top:10px;">1 means one core only (slowest, uses the least memory).</p>
+            <div id="workersMsg" class="set-msg"></div>
+        </div>
+
         <div class="card">
             <h3><i class="fas fa-folder-open"></i> Where your settings are kept</h3>
             <p>Your connection, the strategies you save locally and the downloaded class gallery are
@@ -66,6 +81,20 @@
     </div>
 
     <script nonce="{{ csp_nonce }}">
+        async function saveWorkers(value) {
+            const el = document.getElementById('workersMsg');
+            try {
+                const d = await postJson('/settings/workers', { workers: value });
+                document.getElementById('workers').value = d.workers;
+                el.textContent = 'Saved. Runs now use up to ' + d.workers + (d.workers === 1 ? ' core.' : ' cores.');
+                el.className = 'set-msg ok';
+            } catch (e) { el.textContent = e.message; el.className = 'set-msg err'; }
+            el.style.display = 'block';
+        }
+        document.getElementById('workersBtn').addEventListener('click',
+            () => saveWorkers(parseInt(document.getElementById('workers').value, 10) || 1));
+        document.getElementById('workersDefaultBtn').addEventListener('click', () => saveWorkers(null));
+
         function showMsg(text, ok) {
             const el = document.getElementById('connMsg');
             el.textContent = text;

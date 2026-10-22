@@ -7,6 +7,9 @@ import os
 # Ensure a stable secret key exists before app.py is imported: in production
 # mode (the default) app.py now requires FLASK_SECRET_KEY and raises without it.
 os.environ.setdefault('FLASK_SECRET_KEY', 'test-secret-key')
+# One core by default so tests are fast and don't start worker processes; the parallel tests set
+# their own value.
+os.environ.setdefault('IPD_WORKERS', '1')
 
 import pytest
 from unittest.mock import Mock, MagicMock, patch

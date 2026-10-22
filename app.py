@@ -1434,10 +1434,38 @@ def _apply_hub_settings(base_url, token):
 def settings_page():
     """Settings tab: the class website connection (and where settings are kept)."""
     import hub_client
+    import parallel
     return render_template('settings.html', hub_enabled=hub_client.hub_enabled(),
                            hub_base_url=hub_client.HUB_BASE_URL,
                            hub_has_token=bool(hub_client.HUB_API_TOKEN),
-                           data_dir=DATA_DIR)
+                           data_dir=DATA_DIR, workers=parallel.worker_count(),
+                           default_workers=parallel.default_workers(),
+                           max_workers=parallel.MAX_WORKERS, cpu_count=os.cpu_count() or 1)
+
+
+@app.route('/settings/workers', methods=['POST'])
+@login_required
+@limiter.limit("20 per minute")
+def settings_workers():
+    """POST {workers: n | null}: how many CPU cores runs may use (null = the default)."""
+    import parallel
+    refused = _settings_write_guard()
+    if refused:
+        return refused
+    raw = (request.get_json(silent=True) or {}).get('workers')
+    if raw is None:
+        value = ''                                   # back to the default
+    elif isinstance(raw, int) and not isinstance(raw, bool) and 1 <= raw <= parallel.MAX_WORKERS:
+        value = str(raw)
+    else:
+        return jsonify({'error': f'Enter a whole number from 1 to {parallel.MAX_WORKERS}.'}), 400
+    os.environ['IPD_WORKERS'] = value
+    try:
+        _save_env_values({'IPD_WORKERS': value})
+    except OSError as e:
+        app.logger.error(f"Could not save .env: {e}")
+        return jsonify({'error': "Applied for now, but it couldn't be saved."}), 500
+    return jsonify({'success': True, 'workers': parallel.worker_count()})
 
 
 @app.route('/settings/hub', methods=['GET', 'POST'])
@@ -1732,6 +1760,24 @@ def local_gallery_delete():
 # path and no credentials. Admins upload tournament results on the website too.
 
 
+def _play_pair(i, a_code, a_name, b_code, b_name, *, rounds, payoff_matrix, modes,
+               fixed_random_rounds, discount_factor, stochastic_prob, tournament_info, seed):
+    """Play one pair in every mode (stopping at the first failure). Top level so a worker process
+    can run it (parallel.py). Returns [match_result per mode played]."""
+    pair_mode_results = []
+    for mode_idx, mode in enumerate(modes):
+        # Deterministic sub-seed for this match if a main seed was given
+        match_seed = seed + i * 1000 + mode_idx if seed is not None else None
+        match_result = game(a_code, a_name, b_code, b_name, rounds, payoff_matrix, mode=mode,
+                            fixed_random_rounds=fixed_random_rounds, discount_factor=discount_factor,
+                            stochastic_prob=stochastic_prob, tournament_info=tournament_info,
+                            seed=match_seed)
+        pair_mode_results.append(match_result)
+        if match_result.get('error'):
+            break   # no point playing the other modes of a pair that is void
+    return pair_mode_results
+
+
 def round_robin_tournament(strategies, rounds=200, payoff_matrix=None, modes=None, discount_factor=0.95, stochastic_prob=0.995, weights=None, seed=None, ranking=None):
     """
     Run a round robin tournament with multiple strategies and game modes
@@ -1816,26 +1862,31 @@ def round_robin_tournament(strategies, rounds=200, payoff_matrix=None, modes=Non
     app.logger.info(f"Modes: {modes}")
 
     # --- Step 2: play every pairing (a strategy stops playing once it has been disqualified) ---
+    # With several CPU cores the pairs are played at once in worker processes (parallel.py).
+    # Every match compiles both strategies fresh and its seed depends only on the pair index, so
+    # the results are the same; walking them in order below also gives the same disqualifications.
+    def pair_call(i, strategy_a, strategy_b):
+        return (_play_pair, (i, strategy_a['code'], strategy_a['name'], strategy_b['code'],
+                             strategy_b['name']),
+                {'rounds': rounds, 'payoff_matrix': payoff_matrix, 'modes': modes,
+                 'fixed_random_rounds': fixed_random_rounds, 'discount_factor': discount_factor,
+                 'stochastic_prob': stochastic_prob, 'tournament_info': tournament_info, 'seed': seed})
+    import parallel
+    precomputed = None
+    if parallel.worker_count() > 1 and len(strategy_pairs) >= parallel.MIN_JOBS:
+        app.logger.info(f"Playing {len(strategy_pairs)} pairs on up to {parallel.worker_count()} cores")
+        precomputed = parallel.run_calls(pair_call(i, a, b) for i, (a, b) in enumerate(strategy_pairs))
+
     played = []   # (strategy_a, strategy_b, [match_result per mode])
     for i, (strategy_a, strategy_b) in enumerate(strategy_pairs):
         if strategy_a['name'] in runtime_dq or strategy_b['name'] in runtime_dq:
             continue   # would be thrown out anyway
-        app.logger.info(f"Match {i+1}/{len(strategy_pairs)}: {strategy_a['name']} vs {strategy_b['name']}")
-        pair_mode_results = []
-        for mode_idx, mode in enumerate(modes):
-            # Deterministic sub-seed for this match if a main seed was given
-            match_seed = None
-            if seed is not None:
-                match_seed = seed + i * 1000 + mode_idx
-            match_result = game(
-                strategy_a['code'], strategy_a['name'], strategy_b['code'], strategy_b['name'],
-                rounds, payoff_matrix, mode=mode, fixed_random_rounds=fixed_random_rounds,
-                discount_factor=discount_factor, stochastic_prob=stochastic_prob,
-                tournament_info=tournament_info, seed=match_seed,
-            )
-            pair_mode_results.append(match_result)
-            if match_result.get('error'):
-                break   # no point playing the other modes of a pair that is void
+        if precomputed is not None:
+            pair_mode_results = precomputed[i]
+        else:
+            app.logger.info(f"Match {i+1}/{len(strategy_pairs)}: {strategy_a['name']} vs {strategy_b['name']}")
+            fn, args, kwargs = pair_call(i, strategy_a, strategy_b)
+            pair_mode_results = fn(*args, **kwargs)
         for r in pair_mode_results:
             if r.get('error'):
                 who = r.get('error_player')

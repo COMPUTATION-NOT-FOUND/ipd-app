@@ -50,8 +50,17 @@ def setup_logging(is_production=True):
     # Try to setup file-based logging with rotation
     file_handler_added = False
     logs_dir = 'logs'
-    
+
+    # Worker processes (parallel.py) only print warnings to the console: several processes
+    # writing and rotating one app.log can fail on Windows.
+    if os.environ.get('IPD_WORKER') == '1':
+        level = logging.WARNING
+        logger.setLevel(level)
+        logs_dir = None
+
     try:
+        if logs_dir is None:
+            raise OSError('worker process: no log file')
         # Create logs directory if it doesn't exist
         if not os.path.exists(logs_dir):
             os.makedirs(logs_dir, exist_ok=True)

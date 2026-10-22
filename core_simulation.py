@@ -755,6 +755,20 @@ def run_baseline_simulation(num_cores=2, seed=None, scheduler='round_robin', run
     return {'workloads': per_wl, 'avg': avg, 'scheduler': scheduler}
 
 
+def _homogeneous_job(code, *, seeds, num_cores, scheduler, num_processes, warmup):
+    """One strategy on every core, over every seed and workload. Top level so a worker process
+    can run it (parallel.py). Returns {workloads, avg} or {error} (a disqualification)."""
+    func = extract_strategy_func(code, seed=seeds[0])
+    if not func:
+        return {'error': 'could not find a strategy function in the code'}
+    try:
+        per_wl, avg = _run_replicated([func] * num_cores, num_cores=num_cores, scheduler=scheduler,
+                                      seeds=seeds, num_processes=num_processes, warmup=warmup)
+    except StrategyRuntimeError as e:
+        return {'error': e.reason}
+    return {'workloads': per_wl, 'avg': avg}
+
+
 def run_full_simulation(strategies_data, num_cores=2, seed=None, scheduler='round_robin',
                         runs=1, num_processes=FULL_PROCESS_COUNT, warmup=0.0, ranking=None):
     """HOMOGENEOUS: benchmark each strategy replicated across all N cores.
@@ -766,19 +780,24 @@ def run_full_simulation(strategies_data, num_cores=2, seed=None, scheduler='roun
     seeds = make_seeds(seed, runs)
     strategies = {}
     errors = []   # [{name, reason}] for strategies left out of the ranking (disqualified)
-    for strat in strategies_data:
+    # One job per strategy (all its seeds and workloads, in order, in one process), plus the
+    # baseline; with several CPU cores they run at once (parallel.py) with identical results.
+    import parallel
+    calls = [(_homogeneous_job, (strat['code'],), {'seeds': seeds, 'num_cores': num_cores,
+                                                   'scheduler': scheduler, 'num_processes': num_processes,
+                                                   'warmup': warmup})
+             for strat in strategies_data]
+    calls.append((run_baseline_simulation, (), {'num_cores': num_cores, 'scheduler': scheduler,
+                                                'seeds': seeds, 'num_processes': num_processes,
+                                                'warmup': warmup}))
+    outcomes = parallel.run_calls(calls)
+    baseline = outcomes.pop()
+    for strat, outcome in zip(strategies_data, outcomes):
         name = strat['name']
-        func = extract_strategy_func(strat['code'], seed=seeds[0])
-        if not func:
-            errors.append({'name': name, 'reason': 'could not find a strategy function in the code'})
+        if 'error' in outcome:
+            errors.append({'name': name, 'reason': outcome['error']})
             continue
-        try:
-            per_wl, avg = _run_replicated([func] * num_cores, num_cores=num_cores,
-                                          scheduler=scheduler, seeds=seeds,
-                                          num_processes=num_processes, warmup=warmup)
-        except StrategyRuntimeError as e:
-            errors.append({'name': name, 'reason': e.reason})
-            continue
+        per_wl, avg = outcome['workloads'], outcome['avg']
         strategies[name] = {'workloads': per_wl, 'avg': avg, 'coop_rate': avg.get('coop_rate', 0.0),
                             'submitted_at': strat.get('submitted_at')}
 
@@ -790,8 +809,6 @@ def run_full_simulation(strategies_data, num_cores=2, seed=None, scheduler='roun
     strategies = {r['name']: {**strategies[r['name']], 'rank': r['rank'], 'rank_label': r['rank_label']}
                   for r in ranked}
 
-    baseline = run_baseline_simulation(num_cores=num_cores, scheduler=scheduler, seeds=seeds,
-                                       num_processes=num_processes, warmup=warmup)
     return {
         'assignment_mode': 'homogeneous',
         'scheduler': scheduler,
