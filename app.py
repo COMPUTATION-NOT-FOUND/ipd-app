@@ -35,7 +35,8 @@ else:
 # Files the app writes and must remember: .env (class website connection), saved Local
 # strategies and the gallery caches.
 _DATA_FILES = ('.env', 'local_gallery.json', 'strategy_cache.json', 'practice_cache.json',
-               '.gallery_key')   # the key that unscrambles the two caches (code_vault.py)
+               '.gallery_key',   # the key that unscrambles the two caches (code_vault.py)
+               'gallery_source.json')   # live submissions or which snapshot the cache holds
 
 
 def _user_data_dir():
@@ -94,6 +95,7 @@ from n_player_simulation import group_tournament, call_strategy, validate_move, 
 from tournament_package import sha256_text, canonical_json
 from ranking import normalize_ranking, rank_entries, describe_ranking, DEFAULT_RANKING
 import code_vault
+from version import APP_VERSION
 
 # --- SECURITY & LIMITS ---
 # Shared instruction cap (one exception class and one tracer for every engine). See
@@ -361,7 +363,7 @@ def _inject_csp_nonce():
 @app.context_processor
 def _inject_modes():
     """Expose LOCAL_MODE and the configured website base URL to templates."""
-    return {'LOCAL_MODE': LOCAL_MODE, 'hub_base_url': HUB_BASE_URL}
+    return {'LOCAL_MODE': LOCAL_MODE, 'hub_base_url': HUB_BASE_URL, 'APP_VERSION': APP_VERSION}
 
 
 @app.teardown_request
@@ -1264,6 +1266,29 @@ def _read_practice_cache():
     return code_vault.load_list(PRACTICE_CACHE_PATH)
 
 
+# Which list the strategy cache holds: the live submissions, or a snapshot an admin froze at the
+# end of a round (students keep editing; a snapshot does not change). Saved so Refresh and the
+# results remember it.
+GALLERY_SOURCE_PATH = os.path.join(DATA_DIR, 'gallery_source.json')
+_LIVE_SOURCE = {'source': 'live'}
+
+
+def _read_gallery_source():
+    try:
+        with open(GALLERY_SOURCE_PATH, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, dict) and data.get('source') in ('live', 'snapshot'):
+            return data
+    except (OSError, ValueError):
+        pass
+    return dict(_LIVE_SOURCE)
+
+
+def _write_gallery_source(source):
+    with open(GALLERY_SOURCE_PATH, 'w', encoding='utf-8') as f:
+        json.dump(source, f)
+
+
 def _write_practice_cache(strategies):
     code_vault.save_list(PRACTICE_CACHE_PATH, strategies)
 
@@ -1485,7 +1510,8 @@ def hub_list():
     """Return both locally cached galleries (no network): player submissions + organizer
     practice strategies. Refresh updates them."""
     return jsonify({'strategies': _public_gallery(_read_strategy_cache()),
-                    'practice': _read_practice_cache(), 'cached': True})
+                    'practice': _read_practice_cache(), 'cached': True,
+                    'source': _read_gallery_source()})
 
 
 @app.route('/hub/refresh', methods=['POST'])
@@ -1495,11 +1521,24 @@ def hub_refresh():
     """The only networked gallery call: fetch from the website and overwrite the local
     cache. On failure (offline / website down) keep the existing cache and report."""
     import hub_client
+    data = request.get_json(silent=True) or {}
+    saved = _read_gallery_source()
+    wanted = data.get('source') or saved.get('source', 'live')
     try:
-        strategies = hub_client.list_strategies()
+        if wanted == 'snapshot':
+            snapshot_id = str(data.get('snapshot_id') or saved.get('snapshot_id') or '')
+            if not snapshot_id:
+                return jsonify({'error': 'Pick a snapshot first.'}), 400
+            meta, strategies = hub_client.list_snapshot_strategies(snapshot_id)
+            source = {'source': 'snapshot', 'snapshot_id': snapshot_id,
+                      'label': str(meta.get('label', '')), 'created_at': meta.get('created_at'),
+                      'count': len(strategies)}
+        else:
+            strategies = hub_client.list_strategies()
+            source = dict(_LIVE_SOURCE)
     except hub_client.HubError as e:
         return jsonify({'error': str(e), 'strategies': _public_gallery(_read_strategy_cache()),
-                        'practice': _read_practice_cache()}), 502
+                        'practice': _read_practice_cache(), 'source': saved}), 502
     # Organizer practice strategies are best-effort (older websites may not serve them).
     try:
         practice = hub_client.list_practice_strategies()
@@ -1508,9 +1547,23 @@ def hub_refresh():
     try:
         _write_strategy_cache(strategies)
         _write_practice_cache(practice)
+        _write_gallery_source(source)
     except OSError as e:
         app.logger.warning(f"Could not write strategy cache: {e}")
-    return jsonify({'strategies': _public_gallery(strategies), 'practice': practice, 'refreshed': True})
+    return jsonify({'strategies': _public_gallery(strategies), 'practice': practice, 'refreshed': True,
+                    'source': source})
+
+
+@app.route('/hub/snapshots', methods=['GET'])
+@login_required
+@limiter.limit("30 per minute")
+def hub_snapshots():
+    """Snapshots an admin took on the website, for the gallery source picker."""
+    import hub_client
+    try:
+        return jsonify({'snapshots': hub_client.list_snapshots(), 'source': _read_gallery_source()})
+    except hub_client.HubError as e:
+        return jsonify({'error': str(e), 'snapshots': [], 'source': _read_gallery_source()}), 502
 
 
 @app.route('/hub/import/<strategy_id>', methods=['POST'])

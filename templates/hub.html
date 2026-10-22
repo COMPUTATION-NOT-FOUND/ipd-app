@@ -79,6 +79,16 @@
                 <span><i class="fas fa-list"></i> Submitted strategies</span>
                 <button id="refreshBtn" class="btn-primary"><i class="fas fa-rotate"></i> Refresh</button>
             </h3>
+            <!-- Live submissions, or a snapshot an admin froze at the end of a round. Use the round's
+                 snapshot for the official tournament so later edits don't change what is judged. -->
+            <div style="margin: 0 0 12px;">
+                <label for="sourceSelect"><strong>Gallery source:</strong></label>
+                <select id="sourceSelect" style="padding:6px; width:auto; display:inline-block; margin-left:6px;">
+                    <option value="live">Live submissions (latest versions)</option>
+                </select>
+                <button id="useSourceBtn" class="btn-primary" style="margin-left:6px;"><i class="fas fa-download"></i> Load</button>
+                <div id="sourceNote" class="meta" style="margin-top:6px;"></div>
+            </div>
             <div class="hub-subtabs">
                 <button class="hub-subtab active" data-tab="players"><i class="fas fa-users"></i> Players (<span id="cntPlayers">0</span>)</button>
                 <button class="hub-subtab" data-tab="bots"><i class="fas fa-robot"></i> Bots (<span id="cntBots">0</span>)</button>
@@ -165,13 +175,58 @@
             }
         }
 
+        // Gallery source: what the cache holds now, and the snapshots available on the website.
+        function describeSource(src) {
+            if (src && src.source === 'snapshot') {
+                const when = (src.created_at || '').replace('T', ' ').replace('Z', ' UTC');
+                return 'Using snapshot "' + (src.label || src.snapshot_id) + '"' + (when ? ' taken ' + when : '')
+                    + '. These are the strategies as they were then, even if students changed them since.';
+            }
+            return 'Using the live submissions (each student\'s latest version).';
+        }
+        function showSource(src) { document.getElementById('sourceNote').textContent = describeSource(src); }
+        async function loadSnapshots(current) {
+            const sel = document.getElementById('sourceSelect');
+            try {
+                const d = await (await fetch('/hub/snapshots')).json();
+                (d.snapshots || []).forEach(sn => {
+                    const o = document.createElement('option');
+                    o.value = 'snapshot:' + sn.id;
+                    o.textContent = 'Snapshot: ' + sn.label + ' (' + sn.count + ' strategies, '
+                        + (sn.created_at || '').slice(0, 16).replace('T', ' ') + ' UTC)';
+                    sel.appendChild(o);
+                });
+            } catch (e) { /* offline: live only */ }
+            if (current && current.source === 'snapshot') sel.value = 'snapshot:' + current.snapshot_id;
+        }
+        async function useSource() {
+            const v = document.getElementById('sourceSelect').value;
+            const body = v.startsWith('snapshot:') ? { source: 'snapshot', snapshot_id: v.slice(9) } : { source: 'live' };
+            const btn = document.getElementById('useSourceBtn'); btn.disabled = true;
+            try {
+                const resp = await fetch('/hub/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                           body: JSON.stringify(body) });
+                const data = await resp.json();
+                setHubData(data.strategies, data.practice);
+                renderActiveTab();
+                showSource(data.source);
+                if (!resp.ok) throw new Error(data.error || 'Load failed');
+                showMsg('Loaded. The Practice tab now uses this list.', true, 'listMsg');
+            } catch (e) { showMsg(e.message, false, 'listMsg'); }
+            finally { btn.disabled = false; }
+        }
+
         async function loadCache() {
             // Local cache only — no network. Shown on every page load.
+            let source = null;
             try {
                 const data = await (await fetch('/hub/list')).json();
                 setHubData(data.strategies, data.practice);
+                source = data.source;
             } catch (e) { setHubData([], []); }
             renderActiveTab();
+            showSource(source);
+            if (HUB_ENABLED) loadSnapshots(source);
         }
 
         async function doRefresh() {
@@ -184,6 +239,7 @@
                 const data = await resp.json();
                 setHubData(data.strategies, data.practice);
                 renderActiveTab();
+                if (data.source) showSource(data.source);
                 if (!resp.ok) { throw new Error(data.error || 'Refresh failed'); }
                 const total = hubData.players.length + hubData.bots.length + hubData.practice.length;
                 showMsg('Updated from website (' + total + ' cached: ' + hubData.players.length + ' player, '
@@ -246,6 +302,7 @@
             finally { btn.disabled = false; }
         });
         document.getElementById('refreshBtn').addEventListener('click', doRefresh);
+        document.getElementById('useSourceBtn').addEventListener('click', useSource);
         document.querySelectorAll('.hub-subtab').forEach(b => b.addEventListener('click', () => {
             activeTab = b.dataset.tab;
             document.querySelectorAll('.hub-subtab').forEach(x => x.classList.toggle('active', x === b));

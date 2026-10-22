@@ -10,6 +10,8 @@ Schema Version: tournament_package_v1
 import hashlib
 import json
 import os
+
+from version import APP_VERSION
 import sys
 from datetime import datetime, timezone
 from typing import Dict, Any, Tuple, List, Optional
@@ -161,7 +163,7 @@ def build_tournament_package(
         'schema_version': 'tournament_package_v1',
         'exported_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
         'source': {
-            'app_version': os.environ.get('APP_VERSION', 'unknown'),
+            'app_version': os.environ.get('APP_VERSION') or APP_VERSION,
             'python_version': sys.version  
         },
         'tournament': {

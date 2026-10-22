@@ -1031,7 +1031,8 @@
             // Carry any sandbox-mode flags so the admin can flag these strategies on the
             // website when they confirm the publish (only those with a website_id can be matched).
             const flags = Array.isArray(result && result.flags) ? result.flags : [];
-            const pkg = { kind, name, result, participants, local_bots, flags };
+            // Which list the classmates came from (live, or a snapshot frozen for judging).
+            const pkg = { kind, name, result, participants, local_bots, flags, gallery_source: GALLERY_SOURCE };
             status.textContent = 'Staging to website…';
             try {
                 const resp = await fetch('/hub/publish-result', {
@@ -1380,6 +1381,8 @@
         // — you only tick who competes, so a published result can't be tampered with. Only bots
         // may be replicated (×N). Your own editable "Add Strategy" rows are the local players.
         const GALLERY = {};   // GALLERY[target] = { players: [...], practice: [...] }
+        // Live submissions, or a snapshot frozen by an admin (picked on the Hub page).
+        let GALLERY_SOURCE = { source: 'live' };
 
         function galleryEscape(unsafe) {
             if (!unsafe) return '';
@@ -1473,7 +1476,10 @@
                 <strong>Local</strong> entries are strategies you saved on this machine.
             </div>`;
             const statusEl = document.getElementById(statusId);
-            if (statusEl) statusEl.innerText = `${playerRows.length} player · ${botRows.length} bot · ${practiceRows.length} practice · ${localRows.length} local`;
+            const srcText = GALLERY_SOURCE.source === 'snapshot'
+                ? ` · snapshot "${GALLERY_SOURCE.label || GALLERY_SOURCE.snapshot_id}" (change on the Hub page)`
+                : ' · live submissions';
+            if (statusEl) statusEl.innerText = `${playerRows.length} player · ${botRows.length} bot · ${practiceRows.length} practice · ${localRows.length} local${srcText}`;
         }
 
         // Toggle every checkbox in one section (or all, if no section given) for a mode.
@@ -1492,6 +1498,7 @@
                 const d = await res.json();
                 if (!res.ok && d.strategies === undefined) { throw new Error(d.error || 'Could not reach the website'); }
                 GALLERY[target] = { players: d.strategies || [], practice: d.practice || [] };
+                if (d.source) GALLERY_SOURCE = d.source;
                 renderParticipantChecklist(target, containerId, statusId);
             } catch (e) {
                 console.error(e);

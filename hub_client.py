@@ -18,6 +18,8 @@ Config comes from the environment (loaded from .env by app.py before this is imp
 import os
 import requests
 
+from version import APP_VERSION
+
 HUB_BASE_URL = os.environ.get('HUB_BASE_URL', '').strip().rstrip('/')
 HUB_API_TOKEN = os.environ.get('HUB_API_TOKEN', '').strip()
 
@@ -36,7 +38,8 @@ def hub_enabled():
 
 
 def _headers():
-    headers = {'Accept': 'application/json'}
+    # The website checks this and refuses apps that are too old (HTTP 426).
+    headers = {'Accept': 'application/json', 'X-IPD-App-Version': APP_VERSION}
     if HUB_API_TOKEN:
         headers['Authorization'] = f'Bearer {HUB_API_TOKEN}'
     return headers
@@ -60,11 +63,13 @@ def check_connection(base_url, token):
     message a student can act on; returns None when the website accepts the token."""
     url = f"{base_url.rstrip('/')}/api/strategies"
     try:
-        resp = requests.get(url, headers={'Accept': 'application/json',
+        resp = requests.get(url, headers={'Accept': 'application/json', 'X-IPD-App-Version': APP_VERSION,
                                           'Authorization': f'Bearer {token}'}, timeout=_TIMEOUT)
     except requests.RequestException:
         raise HubError('Could not reach that address. Check it is typed correctly and that '
                        'you are online.')
+    if resp.status_code == 426:
+        raise HubError(_error_text(resp))
     if resp.status_code == 401:
         raise HubError('The website did not accept that token. Check it with your instructor.')
     if resp.status_code == 404:
@@ -74,33 +79,57 @@ def check_connection(base_url, token):
         raise HubError(f'The website answered with an error ({resp.status_code}). Try again later.')
 
 
+def _error_text(resp):
+    """The website's own message for a refused request (e.g. 'Your app is too old ...')."""
+    try:
+        return str(resp.json().get('error') or resp.text)
+    except ValueError:
+        return resp.text or f'error {resp.status_code}'
+
+
+def _get_json(path):
+    """GET a token-gated website path and return its JSON, raising HubError with a clear message."""
+    _require_enabled()
+    try:
+        resp = requests.get(f'{HUB_BASE_URL}{path}', headers=_headers(), timeout=_TIMEOUT)
+    except requests.RequestException as e:
+        raise HubError(f'Could not reach the website: {e}')
+    if resp.status_code == 426:
+        raise HubError(_error_text(resp))          # app too old: say so, with the download link
+    if resp.status_code >= 400:
+        raise HubError(f'The website answered with an error ({resp.status_code}): {_error_text(resp)}')
+    try:
+        return resp.json()
+    except ValueError:
+        raise HubError('Website returned a malformed response.')
+
+
+def list_snapshots():
+    """Frozen copies of every submission, taken by an admin: [{id, label, count, created_at}]."""
+    data = _get_json('/api/snapshots')
+    return data.get('snapshots', []) if isinstance(data, dict) else []
+
+
+def list_snapshot_strategies(snapshot_id):
+    """(snapshot meta, strategies) for one snapshot, strategies shaped like list_strategies()."""
+    from urllib.parse import quote
+    data = _get_json(f'/api/snapshots/{quote(str(snapshot_id), safe="")}/strategies')
+    if not isinstance(data, dict):
+        raise HubError('Website returned a malformed response.')
+    return data.get('snapshot') or {}, data.get('strategies') or []
+
+
 def list_strategies():
     """Return the submitted strategies as a list of {id, name, code, type, flagged, ...}.
     (The website no longer sends author names: every student holds the class token.)"""
-    _require_enabled()
-    try:
-        resp = requests.get(f'{HUB_BASE_URL}/api/strategies', headers=_headers(), timeout=_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-    except requests.RequestException as e:
-        raise HubError(f'Could not reach the website: {e}')
-    except ValueError:
-        raise HubError('Website returned a malformed response.')
+    data = _get_json('/api/strategies')
     # Accept either a bare list or {"strategies": [...]} for forward-compatibility.
     return data.get('strategies', data) if isinstance(data, dict) else data
 
 
 def list_practice_strategies():
     """Return organizer-provided PRACTICE strategies as [{id, name, code}]."""
-    _require_enabled()
-    try:
-        resp = requests.get(f'{HUB_BASE_URL}/api/practice-strategies', headers=_headers(), timeout=_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-    except requests.RequestException as e:
-        raise HubError(f'Could not reach the website: {e}')
-    except ValueError:
-        raise HubError('Website returned a malformed response.')
+    data = _get_json('/api/practice-strategies')
     return data.get('strategies', data) if isinstance(data, dict) else data
 
 
@@ -114,12 +143,10 @@ def stage_result(package):
                              headers=_headers(), timeout=_TIMEOUT)
     except requests.RequestException as e:
         raise HubError(f'Could not reach the website: {e}')
+    if resp.status_code == 426:
+        raise HubError(_error_text(resp))
     if resp.status_code >= 400:
-        try:
-            reason = resp.json().get('error', resp.text)
-        except ValueError:
-            reason = resp.text
-        raise HubError(f'Website rejected the result ({resp.status_code}): {reason}')
+        raise HubError(f'Website rejected the result ({resp.status_code}): {_error_text(resp)}')
     try:
         return resp.json().get('draft_id')
     except ValueError:
@@ -128,15 +155,5 @@ def stage_result(package):
 
 def get_strategy(strategy_id):
     """Return the full record for one strategy, including its `code` field."""
-    _require_enabled()
-    try:
-        resp = requests.get(
-            f'{HUB_BASE_URL}/api/strategies/{strategy_id}',
-            headers=_headers(), timeout=_TIMEOUT,
-        )
-        resp.raise_for_status()
-        return resp.json()
-    except requests.RequestException as e:
-        raise HubError(f'Could not fetch strategy {strategy_id}: {e}')
-    except ValueError:
-        raise HubError('Website returned a malformed response.')
+    from urllib.parse import quote
+    return _get_json(f'/api/strategies/{quote(str(strategy_id), safe="")}')
