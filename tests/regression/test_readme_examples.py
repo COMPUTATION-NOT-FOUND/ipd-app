@@ -20,17 +20,26 @@ README = os.path.join(os.path.dirname(__file__), '..', '..', 'README.md')
 TFT = "def tft(last_moves, my_history, opponents_histories, meta):\n    return last_moves[0] if last_moves else 'C'"
 
 
-GUIDE = os.path.join(os.path.dirname(__file__), '..', '..', 'docs', 'guide', 'student-guide.html')
+# The website FAQ's examples (ipd-hub/site_content.py), when the website repo sits next to this
+# one. The FAQ replaced the student-guide PDF; this keeps its examples tested on the real engine.
+SITE_CONTENT = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'ipd-hub', 'site_content.py')
+
+
+def _faq_examples():
+    if not os.path.isfile(SITE_CONTENT):
+        return []
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('ipd_hub_site_content', SITE_CONTENT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return [code + '\n' for code in mod.EXAMPLES.values()]
 
 
 def _examples():
-    """Strategy examples from the README and from the student guide PDF's source."""
-    import html
+    """Strategy examples from the README and from the website FAQ."""
     text = open(README, encoding='utf-8').read()
     blocks = re.findall(r"```python\n(.*?)```", text, re.S)
-    guide = open(GUIDE, encoding='utf-8').read()
-    blocks += [html.unescape(b) + '\n' for b in
-               re.findall(r'<pre><code class="python">(.*?)</code></pre>', guide, re.S)]
+    blocks += _faq_examples()
     seen, out = set(), []
     for b in blocks:
         if b.lstrip().startswith('def ') and b not in seen:

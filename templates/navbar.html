@@ -30,6 +30,15 @@
             <a href="/settings" class="sr-nav-link{% if request.path.startswith('/settings') %} is-active{% endif %}">
                 <i class="fas fa-sliders"></i> Settings
             </a>
+            {# Help lives on the class website (Announcements + FAQ), once the app is connected. #}
+            {% if hub_base_url %}
+            <a href="{{ hub_base_url.rstrip('/') }}/faq" target="_blank" rel="noopener" class="sr-nav-link">
+                <i class="fas fa-circle-question"></i> FAQ
+            </a>
+            <a href="{{ hub_base_url.rstrip('/') }}/announcements" target="_blank" rel="noopener" class="sr-nav-link">
+                <i class="fas fa-bullhorn"></i> Schedule
+            </a>
+            {% endif %}
             <button type="button" id="themeToggle" class="sr-theme-toggle"
                     aria-label="Switch to light theme" aria-pressed="false">
                 <i class="fas fa-sun"></i>

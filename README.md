@@ -8,7 +8,7 @@ You will do three things.
 2. Practise it against your own ideas and against your classmates' strategies.
 3. Submit your best one to the class website.
 
-A short PDF version of this guide is in [docs/student-guide.pdf](docs/student-guide.pdf).
+The schedule, the settings for each round and a full FAQ (including everything in `meta`) are on the class website, under Announcements and FAQ.
 
 
 ## 1. Get the app
@@ -201,7 +201,7 @@ def adapts_to_the_game(last_moves, my_history, opponents_histories, meta):
     return last_moves[0]
 ```
 
-In 1v1 it also holds the payoff table, for example `{'CC': [3, 3], 'CD': [0, 5], 'DC': [5, 0], 'DD': [1, 1]}`. The first number in each pair is your score.
+In 1v1 it also holds the payoff table, for example `{'CC': [3, 3], 'CD': [0, 5], 'DC': [5, 0], 'DD': [1, 1]}`. Each key is your move then the other player's move, and each value is `[your points, their points]`. So your score for a round is `table[my_move + their_move][0]`.
 
 ```python
 def reads_the_payoffs(last_moves, my_history, opponents_histories, meta):
@@ -214,7 +214,7 @@ def reads_the_payoffs(last_moves, my_history, opponents_histories, meta):
     return last_moves[0]
 ```
 
-N-Player also puts `mode`, `group_index`, `weights` and `payoff_model` in there, and 1v1 puts `weights`. You rarely need them.
+It also tells you the match `mode`, the `modes` and `rounds` of the run, and `ranking`, how the run is ranked. In N-Player `payoff_model` holds the jar settings, such as `{'name': 'public_goods', 'b': 0.4, 'c': 1}`. In the OS Simulation `scheduler` names the scheduler. The website FAQ lists every key for each game.
 
 ### What last_moves means in each game
 
@@ -229,7 +229,7 @@ The app has three tabs, one for each game. In each one you add strategies, choos
 
 ### 1v1
 
-Every strategy plays every other strategy, one pair at a time. The leaderboard ranks them by a weighted score made of win rate, cooperation and points. Move the sliders to change how much each part counts and press Recalculate.
+Every strategy plays every other strategy, one pair at a time. The leaderboard ranks them by total points, highest first. Ties go to more wins, then higher cooperation %, then whoever submitted first. Use the Ranking box above the table to rank by something else and press Apply.
 
 1. Open the 1v1 tab. Two example strategies are already filled in.
 2. Change their code or press Add Strategy to add your own.
@@ -308,6 +308,6 @@ Every Python example in this README is run by `tests/regression/test_readme_exam
 
 `python app.py` serves with Waitress on 127.0.0.1:5000. Set `FLASK_DEBUG=True` to use the Flask debug server instead.
 
-The download in Option A is built with PyInstaller from `launcher.py`. Run `pip install -r requirements-build.txt` and `python build_exe.py` to build it for your own system. Pushing a version tag such as `git tag v1.3.0 && git push origin v1.3.0` makes GitHub test and build all three systems and publish a release. The `.env` file is never bundled, because anything inside the app can be unpacked and the class token must stay private. The student guide PDF is built from `docs/guide/student-guide.html` with `python docs/guide/build_pdf.py`.
+The download in Option A is built with PyInstaller from `launcher.py`. Run `pip install -r requirements-build.txt` and `python build_exe.py` to build it for your own system. Pushing a version tag such as `git tag v1.3.0 && git push origin v1.3.0` makes GitHub test and build all three systems and publish a release. The `.env` file is never bundled, because anything inside the app can be unpacked and the class token must stay private.
 
-The weighted score is `(win_rate * W_win + cooperation * W_coop + points * W_points) * 100`. Win rate is counted per opponent and points per round, so the length of a match never changes the ranking. All strategy code is checked by `is_safe_code` and limited by an instruction cap, and the website checks it again on submit.
+Rankings use `ranking.py` (and its browser twin `static/js/ranking.js`). The optional weighted score is `(win_rate * W_win + cooperation * W_coop + points * W_points) * 100`. Win rate is counted per opponent and points per round, so the length of a match never changes the ranking. All strategy code is checked by `is_safe_code` and limited by an instruction cap, and the website checks it again on submit.
