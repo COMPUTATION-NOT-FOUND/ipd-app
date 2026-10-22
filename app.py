@@ -93,49 +93,10 @@ from n_player_simulation import group_tournament, call_strategy, validate_move, 
 from tournament_package import sha256_text, canonical_json
 
 # --- SECURITY & LIMITS ---
-class InstructionLimitExceeded(BaseException):
-    """Raised when a strategy executes too many instructions (loops).
-
-    Derives from BaseException, NOT Exception, on purpose: sandboxed strategies can name
-    `Exception`, so a `while True: try: ... except Exception: pass` body would otherwise
-    swallow this and defeat the instruction cap entirely. Every run_with_limit call site
-    catches InstructionLimitExceeded explicitly before its `except Exception` clause.
-    """
-    pass
-
-
-# Per-round instruction (line-event) budget for a single strategy call. Bounds runaway loops
-# without disqualifying legitimately expensive strategies -- e.g. a suffix-tree strategy that
-# does real work per round used to die mid-match under the old 10,000 budget. Matches run on the
-# user's own machine, so this is the only runtime bound (there is no wall-clock cap).
-try:
-    MAX_STRATEGY_INSTRUCTIONS = int(os.environ.get('MAX_STRATEGY_INSTRUCTIONS', '200000'))
-except (TypeError, ValueError):
-    MAX_STRATEGY_INSTRUCTIONS = 200000
-if MAX_STRATEGY_INSTRUCTIONS < 1000:
-    MAX_STRATEGY_INSTRUCTIONS = 200000
-
-
-def run_with_limit(func, *args, limit=None):
-    """Execute a function with a strict instruction (line) limit using closure."""
-    if limit is None:
-        limit = MAX_STRATEGY_INSTRUCTIONS
-    instr_count = [limit]  # Use mutable list so trace function can modify it
-
-    def trace_instructions(frame, event, arg):
-        """Trace function to count lines and enforce limits."""
-        if event == 'line':
-            instr_count[0] -= 1
-            if instr_count[0] <= 0:
-                raise InstructionLimitExceeded("Loop limit exceeded")
-        return trace_instructions
-    
-    sys.settrace(trace_instructions)
-    try:
-        result = func(*args)
-        return result
-    finally:
-        sys.settrace(None)
+# Shared instruction cap (one exception class and one tracer for every engine). See
+# instruction_limit.py for why the tracer is never switched off after each call.
+from instruction_limit import (InstructionLimitExceeded, EngineTraceError,  # noqa: F401  (re-exported)
+                               MAX_STRATEGY_INSTRUCTIONS, run_with_limit, release_tracer)
 
 # (There is no per-match wall-clock cap: the app runs on the user's own machine, so a match
 # takes as long as it takes. A pathological per-round strategy is still bounded by the per-call
@@ -398,6 +359,12 @@ def _inject_csp_nonce():
 def _inject_modes():
     """Expose LOCAL_MODE and the configured website base URL to templates."""
     return {'LOCAL_MODE': LOCAL_MODE, 'hub_base_url': HUB_BASE_URL}
+
+
+@app.teardown_request
+def _release_strategy_tracer(exc=None):
+    """Switch the instruction-cap tracer off once per request, not once per strategy call."""
+    release_tracer()
 
 
 @app.after_request
@@ -1072,6 +1039,8 @@ def game(player_a_code, player_a_name, player_b_code, player_b_name, rounds=200,
                 move = validate_move(run_with_limit(call_strategy, func, last_moves, own_history.copy(),
                                                     [opp_history.copy()], meta, limit=MAX_STRATEGY_INSTRUCTIONS))
                 return move, None
+            except EngineTraceError:
+                raise   # engine fault: never blame the strategy
             except InstructionLimitExceeded as e:
                 exc = e
             except Exception as e:

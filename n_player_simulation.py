@@ -11,47 +11,10 @@ import random
 from typing import Callable, Any
 
 
-class InstructionLimitExceeded(BaseException):
-    """Raised when a strategy executes too many instructions.
-
-    Derives from BaseException, NOT Exception, on purpose: sandboxed strategies can name
-    `Exception`, so a `while True: try: ... except Exception: pass` body would otherwise
-    swallow this and defeat the instruction cap entirely. Every run_with_limit call site
-    catches InstructionLimitExceeded explicitly before its `except Exception` clause.
-    """
-    pass
-
-
-# Per-round instruction (line-event) budget for a single strategy call. Mirrors app.py's
-# constant -- keep the two defaults in step.
-try:
-    MAX_STRATEGY_INSTRUCTIONS = int(os.environ.get('MAX_STRATEGY_INSTRUCTIONS', '200000'))
-except (TypeError, ValueError):
-    MAX_STRATEGY_INSTRUCTIONS = 200000
-if MAX_STRATEGY_INSTRUCTIONS < 1000:
-    MAX_STRATEGY_INSTRUCTIONS = 200000
-
-
-def run_with_limit(func, *args, limit=None):
-    """Execute a function with a strict instruction (line) limit using closure."""
-    if limit is None:
-        limit = MAX_STRATEGY_INSTRUCTIONS
-    instr_count = [limit]  # Use mutable list so trace function can modify it
-    
-    def trace_instructions(frame, event, arg):
-        """Trace function to count lines and enforce limits."""
-        if event == 'line':
-            instr_count[0] -= 1
-            if instr_count[0] <= 0:
-                raise InstructionLimitExceeded("Loop limit exceeded")
-        return trace_instructions
-    
-    sys.settrace(trace_instructions)
-    try:
-        result = func(*args)
-        return result
-    finally:
-        sys.settrace(None)
+# The instruction cap lives in one shared module so every engine uses the same exception class
+# and the same tracer (see instruction_limit.py for why the tracer is never switched off per call).
+from instruction_limit import (InstructionLimitExceeded, EngineTraceError,  # noqa: F401  (re-exported)
+                               MAX_STRATEGY_INSTRUCTIONS, run_with_limit, release_tracer)
 
 
 class InvalidMove(ValueError):
@@ -283,6 +246,8 @@ def game_n(
                     meta,
                     limit=MAX_STRATEGY_INSTRUCTIONS
                 ))
+            except EngineTraceError:
+                raise   # engine fault: never blame the strategy
             except InstructionLimitExceeded as e:
                 error_player, error_reason = player_idx, describe_strategy_error(e)
                 break

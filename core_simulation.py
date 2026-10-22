@@ -6,7 +6,8 @@ import time
 from cache_model import build_core_hierarchies
 from schedulers import build_scheduler
 from n_player_simulation import (call_strategy, run_with_limit, validate_move,
-                                 describe_strategy_error, InstructionLimitExceeded)
+                                 describe_strategy_error, InstructionLimitExceeded,
+                                 EngineTraceError, release_tracer)
 
 
 class StrategyRuntimeError(Exception):
@@ -466,6 +467,8 @@ class OSSimulator:
                     [contention_history],
                     meta,
                 ))
+            except EngineTraceError:
+                raise   # engine fault: never blame the strategy
             except InstructionLimitExceeded as e:
                 raise StrategyRuntimeError(core_idx, describe_strategy_error(e)) from None
             except Exception as e:
