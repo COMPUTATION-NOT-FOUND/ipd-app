@@ -92,7 +92,7 @@ A few rules.
 * Write one function with these four inputs. The function name can be anything.
 * The strategy name you type in the app is just a label. It can have spaces, like "Grim Trigger", but it must be unique in a run.
 * Always return exactly `'C'` or `'D'`. Returning `1`, `True`, `None` or `'c'` counts as a failure.
-* If your strategy crashes, loops forever or returns something else, it loses that match and the results tell you why.
+* If your strategy crashes, loops forever or returns something else, it is disqualified. It is removed from the ranking, its matches do not count for anyone, and the results tell you why.
 * You can import a few safe modules such as `math`, `random` and `collections`. Files, the network, `exec`, `eval` and `open` are blocked.
 
 Here are three more complete strategies you can paste into the app and play with.

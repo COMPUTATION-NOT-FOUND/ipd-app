@@ -101,17 +101,38 @@ function simEntries(sim, profile) {
     if (het && Array.isArray(het.results) && het.results.length) {
         return het.results.map(r => {
             const src = (useProf && r.workloads && r.workloads[profile]) ? r.workloads[profile] : r;
-            return Object.assign({ label: Object.keys(r.combination || {}).join(' + '), ci: osPickCI(src) }, osPickMetrics(src));
+            return Object.assign({ label: Object.keys(r.combination || {}).join(' + '), ci: osPickCI(src),
+                                   combo: r.combination || {} }, osPickMetrics(src));
         });
     }
     const homo = sim.core_simulation_results;
     if (homo && homo.strategies) {
         return Object.entries(homo.strategies).map(([name, d]) => {
             const src = (useProf && d.workloads && d.workloads[profile]) ? d.workloads[profile] : (d.avg || {});
-            return Object.assign({ label: name, ci: osPickCI(src) }, osPickMetrics(src));
+            return Object.assign({ label: name, ci: osPickCI(src), submitted_at: d.submitted_at }, osPickMetrics(src));
         });
     }
     return [];
+}
+
+// Ranking for OS results (static/js/ranking.js): the spec saved on the result, else the
+// itinerary default (lowest average response time). Rows use short metric names.
+const OS_RANK_KEYS = { avg_response: 'response', avg_waiting: 'wait', avg_turnaround: 'turnaround',
+                       throughput: 'throughput', makespan: 'makespan', avg_cache_misses: 'cache',
+                       coop_rate: 'coop', earliest_submission: 'submitted_at' };
+function osRankSpec(sim) {
+    const het = sim.core_simulation_heterogeneous || {}, homo = sim.core_simulation_results || {};
+    return (typeof normalizeRanking === 'function')
+        ? normalizeRanking(sim.ranking || het.ranking || homo.ranking, 'os') : null;
+}
+function osRankGet(e, metric) { return e[OS_RANK_KEYS[metric] || metric]; }
+function rankedSimEntries(sim, profile) {
+    const entries = simEntries(sim, profile);
+    const spec = osRankSpec(sim);
+    if (spec) return rankEntries(entries, spec, 'os', osRankGet);
+    entries.sort((a, b) => a.response - b.response);
+    entries.forEach((e, i) => { e.rank = i + 1; e.rank_label = String(i + 1); });
+    return entries;
 }
 
 // The baseline (vanilla selected scheduler) entry for a given profile, or null if absent.
@@ -133,7 +154,7 @@ function osBaselineColor() { return srToken('--chart-baseline', '#6b6e76'); }
 function createSimulationComparisonChart(sim, profile) {
     simChartInstances.forEach(c => { try { c.destroy(); } catch (e) {} });
     simChartInstances = [];
-    const entries = simEntries(sim, profile).slice().sort((a, b) => b.throughput - a.throughput);
+    const entries = rankedSimEntries(sim, profile);
     if (!entries.length || typeof Chart === 'undefined') return;
     const baseline = simBaselineEntry(sim, profile);
 
@@ -277,12 +298,10 @@ function buildSimTable(sim, profile) {
     const isHet = !!(sim.core_simulation_heterogeneous
         && Array.isArray(sim.core_simulation_heterogeneous.results)
         && sim.core_simulation_heterogeneous.results.length);
-    // Per-strategy (homogeneous): rank by throughput descending so the table matches the
-    // throughput leaderboard bar and the rank-1 highlight marks the actual top performer.
-    // Heterogeneous: keep the server's ranked order — its row index aligns with hetResults[idx]
-    // (the combination shown per row), so re-sorting would mismatch the mixture labels.
-    const rawEntries = simEntries(sim, profile);
-    const entries = isHet ? rawEntries : rawEntries.slice().sort((a, b) => b.throughput - a.throughput);
+    // Rows are ordered by the result's ranking (default: lowest average response time), for the
+    // selected workload too. Each mixture row carries its own combination, so sorting is safe.
+    const entries = rankedSimEntries(sim, profile);
+    const spec = osRankSpec(sim);
     const baseline = simBaselineEntry(sim, profile);
     // A value with its +/- range (95% confidence interval) when the result averages several runs.
     const cell = (e, k, digits, suffix) => {
@@ -293,24 +312,24 @@ function buildSimTable(sim, profile) {
     const down = '<i class="fas fa-arrow-down" style="font-size:0.7em"></i>';
     const up = '<i class="fas fa-arrow-up" style="font-size:0.7em"></i>';
 
-    let html = `<table class="leaderboard-table"><thead><tr>
-        <th>${isHet ? '#' : ''}</th><th>${isHet ? 'Mixture' : 'Strategy'}</th>
+    let html = (spec && typeof rankingLineHtml === 'function') ? rankingLineHtml(spec, 'os') : '';
+    html += `<table class="leaderboard-table"><thead><tr>
+        <th>Rank</th><th>${isHet ? 'Mixture' : 'Strategy'}</th>
         <th>Throughput ${up}</th><th>Wait ${down}</th><th>Turnaround ${down}</th>
         <th>Response ${down}</th><th>Makespan ${down}</th><th>Cache Misses ${down}</th>
         <th>Coop % ${up}</th></tr></thead><tbody>`;
 
-    const hetResults = isHet ? sim.core_simulation_heterogeneous.results : [];
     entries.forEach((e, idx) => {
         let nameCell;
         if (isHet) {
-            const combo = (hetResults[idx] && hetResults[idx].combination) || {};
+            const combo = e.combo || {};
             nameCell = Object.keys(combo)
                 .map(n => `<span class="badge" style="background:var(--bg-card); border:1px solid var(--border-color); margin:1px;">${osSimEsc(n)}</span>`).join(' ');
         } else {
             nameCell = `<strong>${osSimEsc(e.label)}</strong>`;
         }
-        html += `<tr class="${idx === 0 ? 'rank-1' : ''}">
-            <td>${isHet ? '<strong>' + (idx + 1) + '</strong>' : ''}</td>
+        html += `<tr class="${e.rank === 1 ? 'rank-1' : ''}">
+            <td title="${String(e.rank_label).startsWith('=') ? 'Tied' : ''}"><strong>${osSimEsc(e.rank_label)}</strong></td>
             <td>${nameCell}</td>
             <td><strong style="color:var(--primary-muted);">${cell(e, 'throughput', 2)}</strong></td>
             <td>${cell(e, 'wait', 2)}</td>

@@ -61,8 +61,15 @@ function pdRankLabels(scores) {
     });
 }
 
+// The ranking spec and mode a tournament object is shown with (needs static/js/ranking.js).
+function pdRankingOf(tournament) {
+    const mode = tournament.rank_mode || (tournament.kind === 'nplayer' ? 'nplayer' : '1v1');
+    const spec = (typeof normalizeRanking === 'function') ? normalizeRanking(tournament.ranking, mode) : null;
+    return { mode, spec };
+}
+
 // Compute the per-strategy weighted-score breakdown from the stored leaderboard (pdScoreEntry
-// per entry), sorted best first.
+// per entry), ordered by the tournament's ranking (default: highest total points).
 function pdComputeScores(tournament) {
     const leaderboard = Array.isArray(tournament.leaderboard) ? tournament.leaderboard : [];
     const w = tournament.weights || {};
@@ -76,13 +83,17 @@ function pdComputeScores(tournament) {
         });
         if (maxVal > 0) maxPayoff = maxVal;
     }
-    const scored = leaderboard.map(e => {
+    let scored = leaderboard.map(e => {
         const s = pdScoreEntry(e, wWin, wCoop, wPts, maxPayoff);
         return Object.assign({}, e, s, {
+            weighted_score: s.weightedScore,
             coopPct: e.cooperation_percentage != null ? e.cooperation_percentage : s.coopScore * 100,
         });
-    }).sort((a, b) => b.weightedScore - a.weightedScore);
-    return { scored, weights: { wWin, wCoop, wPts } };
+    });
+    const { mode, spec } = pdRankingOf(tournament);
+    if (spec) scored = rankEntries(scored, spec, mode);
+    else scored.sort((a, b) => (b.total_points || 0) - (a.total_points || 0));
+    return { scored, weights: { wWin, wCoop, wPts }, spec, mode };
 }
 
 // Build the head-to-head matrix HTML (row strategy vs column strategy) from pairwise matches.
@@ -124,7 +135,7 @@ function pdBuildH2H(el, names, matches) {
     el.innerHTML = html;
 }
 
-function pdDrawCharts(container, scored, modes, matches) {
+function pdDrawCharts(container, scored, modes, matches, spec, mode) {
     if (!container) return;
     // Destroy only THIS container's previous charts, then look canvases up *within* the container
     // (not document-wide) so reused IDs across the 1v1 / N-Player panels resolve correctly.
@@ -134,12 +145,14 @@ function pdDrawCharts(container, scored, modes, matches) {
     pdChartInstancesByContainer.set(container, pdChartInstances);
     if (typeof Chart === 'undefined' || !scored.length) return;
 
-    // 1) Weighted-score bar (horizontal)
+    // 1) Bar of the number the table is ranked by (horizontal), in ranked order
+    const metric = spec ? spec.metric : 'total_points';
+    const metricLabel = (spec && typeof RANK_METRICS !== 'undefined') ? RANK_METRICS[mode][metric][0] : 'Total points';
     const barCtx = container.querySelector('#pdScoreBar');
     if (barCtx) pdChartInstances.push(new Chart(barCtx, {
         type: 'bar',
         data: { labels: scored.map(e => e.name),
-            datasets: [{ label: 'Weighted Score', data: scored.map(e => e.weightedScore),
+            datasets: [{ label: metricLabel, data: scored.map(e => Number(e[metric]) || 0),
                 backgroundColor: srAlpha(srToken('--chart-1', '#2dd4bf'), 60) }] },
         options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
             plugins: { legend: { display: false } } }
@@ -191,7 +204,7 @@ function pdDrawCharts(container, scored, modes, matches) {
     }
 
     // Head-to-head matrix (1v1 only).
-    const pairwise = (matches || []).filter(m => m && m.player_a && m.player_b);
+    const pairwise = (matches || []).filter(m => m && m.player_a && m.player_b && !m.void);
     if (pairwise.length) pdBuildH2H(container.querySelector('#pdH2H'), scored.map(e => e.name), pairwise);
 }
 
@@ -199,16 +212,17 @@ function pdDrawCharts(container, scored, modes, matches) {
 function renderPDResults(container, tournament) {
     if (typeof container === 'string') container = document.getElementById(container);
     if (!container || !tournament) return;
-    const { scored } = pdComputeScores(tournament);
+    const { scored, spec, mode } = pdComputeScores(tournament);
     if (!scored.length) { container.innerHTML = ''; return; }
+    const barTitle = (spec && typeof RANK_METRICS !== 'undefined') ? RANK_METRICS[mode][spec.metric][0] : 'Total points';
     let modes = Array.isArray(tournament.modes) ? tournament.modes
         : (tournament.tournament_info && tournament.tournament_info.modes) || [];
     if (!Array.isArray(modes)) modes = [];
     const matches = Array.isArray(tournament.matches) ? tournament.matches : [];
-    const pairwise = matches.filter(m => m && m.player_a && m.player_b);
+    const pairwise = matches.filter(m => m && m.player_a && m.player_b && !m.void);
 
     let html = `<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:20px; margin-top:10px;">
-        <div><h4>Weighted score</h4><div style="height:300px;"><canvas id="pdScoreBar"></canvas></div></div>
+        <div><h4>${pdEsc(barTitle)} <span style="font-weight:normal; color:var(--text-secondary); font-size:0.8em;">(ranked order)</span></h4><div style="height:300px;"><canvas id="pdScoreBar"></canvas></div></div>
         <div><h4>Avg Points &uarr; vs Cooperation</h4><div style="height:300px;"><canvas id="pdScatter"></canvas></div></div>
         <div><h4>Normalised profile <span style="font-weight:normal; color:var(--text-secondary); font-size:0.8em;">(outer = better)</span></h4><div style="height:320px;"><canvas id="pdRadar"></canvas></div></div>`;
     if (modes.length) html += `<div><h4>Points per game mode</h4><div style="height:300px;"><canvas id="pdModeBar"></canvas></div></div>`;
@@ -216,7 +230,7 @@ function renderPDResults(container, tournament) {
     if (pairwise.length) html += `<div style="margin-top:24px;"><h4>Head-to-head <span style="font-weight:normal; color:var(--text-secondary); font-size:0.85em;">(row vs column)</span></h4><div id="pdH2H" style="overflow-x:auto; margin-top:8px;"></div></div>`;
     container.innerHTML = html;
 
-    setTimeout(() => pdDrawCharts(container, scored, modes, matches), 30);
+    setTimeout(() => pdDrawCharts(container, scored, modes, matches, spec, mode), 30);
 }
 
 
@@ -234,9 +248,9 @@ function renderPDResults(container, tournament) {
 const pdLastDrawArgs = new Map();
 const pdDrawChartsInner = pdDrawCharts;
 
-pdDrawCharts = function (container, scored, modes, matches) {
-    if (container) pdLastDrawArgs.set(container, [container, scored, modes, matches]);
-    return pdDrawChartsInner(container, scored, modes, matches);
+pdDrawCharts = function (container, scored, modes, matches, spec, mode) {
+    if (container) pdLastDrawArgs.set(container, [container, scored, modes, matches, spec, mode]);
+    return pdDrawChartsInner(container, scored, modes, matches, spec, mode);
 };
 
 document.addEventListener('themechange', function () {

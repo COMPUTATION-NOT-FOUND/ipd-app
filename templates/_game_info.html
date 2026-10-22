@@ -118,7 +118,8 @@
                 <strong>match length never biases the score</strong>.</p>
             <p class="muted">A strategy must return exactly <code>'C'</code> or <code>'D'</code>. One that crashes,
                 loops forever, or returns anything else (e.g. <code>1</code>, <code>None</code>, <code>'c'</code>)
-                <strong>forfeits</strong> that match, and the results say which strategy failed and why.</p>
+                is <strong>disqualified</strong>. It is removed from the ranking, its matches do not count
+                for anyone, and the results say which strategy failed and why.</p>
         </div>
     </details>
 
