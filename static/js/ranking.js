@@ -143,14 +143,14 @@ function rankingControlsHtml(mode, spec, prefix, action) {
     const metricOpts = keys.filter(k => k !== 'earliest_submission').map(k => opt(k, spec.metric)).join('');
     const tbSelect = (n) => {
         const cur = spec.tiebreak[n] || '';
-        return `<select id="${prefix}_tb${n}" style="padding:5px;">
+        return `<select id="${prefix}_tb${n}" style="padding:5px; width:auto; display:inline-block;">
             <option value=""${cur ? '' : ' selected'}>(none)</option>${keys.map(k => opt(k, cur)).join('')}</select>`;
     };
     return `<div class="ranking-controls" style="background: rgba(0,0,0,0.2); padding: 12px 15px; border-radius: 8px; margin-bottom: 15px;">
         <h4 style="margin: 0 0 10px 0;">Ranking</h4>
         <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
-            <label>Rank by <select id="${prefix}_metric" style="padding:5px;">${metricOpts}</select></label>
-            <select id="${prefix}_dir" style="padding:5px;">
+            <label>Rank by <select id="${prefix}_metric" style="padding:5px; width:auto; display:inline-block;">${metricOpts}</select></label>
+            <select id="${prefix}_dir" style="padding:5px; width:auto; display:inline-block;">
                 <option value="desc"${spec.direction === 'desc' ? ' selected' : ''}>highest first</option>
                 <option value="asc"${spec.direction === 'asc' ? ' selected' : ''}>lowest first</option>
             </select>

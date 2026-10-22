@@ -34,7 +34,8 @@ else:
 
 # Files the app writes and must remember: .env (class website connection), saved Local
 # strategies and the gallery caches.
-_DATA_FILES = ('.env', 'local_gallery.json', 'strategy_cache.json', 'practice_cache.json')
+_DATA_FILES = ('.env', 'local_gallery.json', 'strategy_cache.json', 'practice_cache.json',
+               '.gallery_key')   # the key that unscrambles the two caches (code_vault.py)
 
 
 def _user_data_dir():
