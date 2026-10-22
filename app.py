@@ -92,6 +92,7 @@ from payoff_models import PairwiseMatrixPayoff, PublicGoodsPayoff, KCooperatorTe
 from n_player_simulation import group_tournament, call_strategy, validate_move, describe_strategy_error
 from tournament_package import sha256_text, canonical_json
 from ranking import normalize_ranking, rank_entries, describe_ranking, DEFAULT_RANKING
+import code_vault
 
 # --- SECURITY & LIMITS ---
 # Shared instruction cap (one exception class and one tracer for every engine). See
@@ -1236,18 +1237,15 @@ def hub_publish_result():
 STRATEGY_CACHE_PATH = os.path.join(DATA_DIR, 'strategy_cache.json')
 
 
+# Both gallery caches are stored scrambled (code_vault) so classmates' code can't be read just by
+# opening the file. The app reads it back to run matches; the browser never gets it (see
+# _public_gallery and _resolve_website_strategies).
 def _read_strategy_cache():
-    try:
-        with open(STRATEGY_CACHE_PATH, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        return data if isinstance(data, list) else []
-    except (FileNotFoundError, ValueError, OSError):
-        return []
+    return code_vault.load_list(STRATEGY_CACHE_PATH)
 
 
 def _write_strategy_cache(strategies):
-    with open(STRATEGY_CACHE_PATH, 'w', encoding='utf-8') as f:
-        json.dump(strategies, f)
+    code_vault.save_list(STRATEGY_CACHE_PATH, strategies)
 
 
 # Organizer-provided PRACTICE strategies are cached separately from player submissions
@@ -1256,17 +1254,60 @@ PRACTICE_CACHE_PATH = os.path.join(DATA_DIR, 'practice_cache.json')
 
 
 def _read_practice_cache():
-    try:
-        with open(PRACTICE_CACHE_PATH, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        return data if isinstance(data, list) else []
-    except (FileNotFoundError, ValueError, OSError):
-        return []
+    return code_vault.load_list(PRACTICE_CACHE_PATH)
 
 
 def _write_practice_cache(strategies):
-    with open(PRACTICE_CACHE_PATH, 'w', encoding='utf-8') as f:
-        json.dump(strategies, f)
+    code_vault.save_list(PRACTICE_CACHE_PATH, strategies)
+
+
+# --- Classmates' code stays out of the browser (student report, Oct 2026) ---------------------
+# A classmate's submission ("player", i.e. any website strategy that is not a bot) is listed by
+# name and id only. Runs send the id and the server fills in the code from the cache. Bots and
+# organizer practice strategies keep their code: they are there to be studied.
+
+def _is_classmate(record):
+    return isinstance(record, dict) and record.get('type', 'tournament') != 'bot'
+
+
+def _public_gallery(strategies):
+    out = []
+    for rec in strategies or []:
+        if _is_classmate(rec):
+            rec = {k: v for k, v in rec.items() if k != 'code'}
+            rec['hidden'] = True
+        out.append(rec)
+    return out
+
+
+def _resolve_website_strategies(strategies):
+    """Fill in code (and the submission time) for strategies picked from the website gallery
+    by ``website_id``. The cached code always wins over code sent by the page. Returns
+    (strategies, error_message)."""
+    if not isinstance(strategies, list):
+        return strategies, None
+    cache = {str(r.get('id')): r for r in _read_strategy_cache() + _read_practice_cache()
+             if isinstance(r, dict) and r.get('id') is not None}
+    out = []
+    for item in strategies:
+        if not isinstance(item, dict):
+            out.append(item)
+            continue
+        item = dict(item)
+        wid = item.get('website_id')
+        rec = cache.get(str(wid)) if wid is not None else None
+        if rec is not None:
+            item['code'] = rec.get('code', '')
+            if isinstance(rec.get('submitted_at'), str):
+                item['submitted_at'] = rec['submitted_at']
+        else:
+            if wid is not None and not item.get('code'):
+                return None, (f'"{item.get("name", "?")}" is not in the local gallery any more. '
+                              'Press Refresh Gallery while online, then run again.')
+            # Only website strategies carry a trusted submission time.
+            item.pop('submitted_at', None)
+        out.append(item)
+    return out, None
 
 
 # Local personal gallery: strategies the user saves on THIS machine ("Save locally"). Unlike
@@ -1436,7 +1477,7 @@ def hub_settings_disconnect():
 def hub_list():
     """Return both locally cached galleries (no network): player submissions + organizer
     practice strategies. Refresh updates them."""
-    return jsonify({'strategies': _read_strategy_cache(),
+    return jsonify({'strategies': _public_gallery(_read_strategy_cache()),
                     'practice': _read_practice_cache(), 'cached': True})
 
 
@@ -1450,7 +1491,7 @@ def hub_refresh():
     try:
         strategies = hub_client.list_strategies()
     except hub_client.HubError as e:
-        return jsonify({'error': str(e), 'strategies': _read_strategy_cache(),
+        return jsonify({'error': str(e), 'strategies': _public_gallery(_read_strategy_cache()),
                         'practice': _read_practice_cache()}), 502
     # Organizer practice strategies are best-effort (older websites may not serve them).
     try:
@@ -1462,7 +1503,7 @@ def hub_refresh():
         _write_practice_cache(practice)
     except OSError as e:
         app.logger.warning(f"Could not write strategy cache: {e}")
-    return jsonify({'strategies': strategies, 'practice': practice, 'refreshed': True})
+    return jsonify({'strategies': _public_gallery(strategies), 'practice': practice, 'refreshed': True})
 
 
 @app.route('/hub/import/<strategy_id>', methods=['POST'])
@@ -1487,9 +1528,17 @@ def hub_import(strategy_id):
         return jsonify({'error': f'Imported strategy rejected by local sandbox: {error}'}), 400
 
     # Pass through any admin flag so the page can warn before the user runs this strategy.
-    return jsonify({'success': True, 'name': name, 'code': code,
-                    'flagged': bool((record or {}).get('flagged', False)),
-                    'flag_reason': (record or {}).get('flag_reason', '')})
+    reply = {'success': True, 'name': name, 'id': record.get('id'),
+             'flagged': bool((record or {}).get('flagged', False)),
+             'flag_reason': (record or {}).get('flag_reason', '')}
+    # A classmate's code stays hidden: the page gets the name and id, and runs use the id.
+    in_practice = any(str(r.get('id')) == str(strategy_id) for r in _read_practice_cache()
+                      if isinstance(r, dict))
+    if _is_classmate(record) and not in_practice:
+        reply['hidden'] = True
+    else:
+        reply['code'] = code
+    return jsonify(reply)
 
 
 _SMOKE_TEST_OPPONENT = "def AllC(last_moves, my_history, opponents_histories, meta):\n    return 'C'"
@@ -1972,6 +2021,9 @@ def run_tournament():
     data = request.json
 
     strategies = data.get('strategies', [])
+    strategies, resolve_error = _resolve_website_strategies(strategies)
+    if resolve_error:
+        return jsonify({'error': resolve_error}), 400
     rounds = int(data.get('rounds', 200))
     payoff_matrix = data.get('payoff_matrix', None)
 
@@ -2104,6 +2156,9 @@ def nplayer_tournament():
     user_is_admin = is_admin()
     
     strategies = data.get('strategies', [])
+    strategies, resolve_error = _resolve_website_strategies(strategies)
+    if resolve_error:
+        return jsonify({'error': resolve_error}), 400
     rounds = int(data.get('rounds', 200))
     seed = data.get('seed', None)
     group_size = data.get('group_size', None)
@@ -2558,6 +2613,9 @@ def os_simulation():
     # A heterogeneous cores×assignment blow-up is bounded by OS_SIM_TIME_BUDGET_S at run time
     # rather than refused up front, unless the caller opted out via `unlimited`.
     strategies = data.get('strategies', [])
+    strategies, resolve_error = _resolve_website_strategies(strategies)
+    if resolve_error:
+        return jsonify({'error': resolve_error}), 400
     if not isinstance(strategies, list):
         return jsonify({'error': 'Strategies must be a list'}), 400
     if len(strategies) < 2:

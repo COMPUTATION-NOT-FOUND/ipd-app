@@ -1049,7 +1049,7 @@
             // Roster = your editable local players + the participants ticked in the checklist
             // (players/practice unique; bots may be replicated). Imported code is never edited.
             const roster = collectLocalRows('strategy', strategyCount).concat(collectSelectedParticipants('1v1'));
-            const strategies = roster.map(r => ({ name: r.name, code: r.code }));
+            const strategies = roster.map(participantPayload);
             if (strategies.length < 2) { alert('Select at least 2 participants (tick players/practice/bots, or add your own local players)!'); return; }
 
             // Collect selected game modes (default to standard if none checked)
@@ -1503,6 +1503,15 @@
         function loadGallery(target, containerId, statusId)    { return fetchGalleryInto(target, containerId, statusId, '/hub/list', 'GET'); }
         function refreshGallery(target, containerId, statusId) { return fetchGalleryInto(target, containerId, statusId, '/hub/refresh', 'POST'); }
 
+        // What the server gets for one roster entry. A classmate's strategy has no code in the
+        // page (it stays hidden), so it is sent by id and the app fills the code in itself.
+        function participantPayload(r) {
+            const out = { name: r.name };
+            if (r.code) out.code = r.code;
+            if (r.website_id !== undefined && r.website_id !== null) out.website_id = r.website_id;
+            return out;
+        }
+
         // Build roster entries from the checked participants. Players/practice are unique; a bot
         // may be replicated (count>1) with suffixed names so the engine treats copies as distinct.
         function collectSelectedParticipants(target) {
@@ -1511,7 +1520,7 @@
             document.querySelectorAll(`.part-check-${target}:checked`).forEach(cb => {
                 const p = cb.dataset.pool, idx = parseInt(cb.dataset.idx);
                 const s = (p === 'practice' ? pool.practice : (p === 'local' ? LOCAL_STRATS : pool.players))[idx];
-                if (!s || !s.name || !s.code) return;
+                if (!s || !s.name || (!s.code && !s.hidden)) return;
                 if (p === 'local') {
                     // A strategy saved on this machine; treat it like one of the user's own rows.
                     out.push({ name: s.name, code: s.code, source: 'local' });
@@ -1548,7 +1557,7 @@
         window.onload = async function() {
             loadDefaultStrategies();
             await loadLocalGallery();   // populate LOCAL_STRATS before the checklists first render
-            loadGallery('1v1', 'galleryContainer', 'galleryStatus');
+            const gallery1v1 = loadGallery('1v1', 'galleryContainer', 'galleryStatus');
             checkAuthStatus();
             // Init N-Player
             addNpStrategy();
@@ -1564,17 +1573,31 @@
             addOsStrategy();
             applyPreset('osStrategy', 2, 'defect');
             loadGallery('os', 'osGalleryContainer', 'osGalleryStatus');
-            openImportedStrategy();
+            openImportedStrategy(gallery1v1);
         };
 
-        // A strategy sent from the Hub page's "Open in Practice" button arrives in sessionStorage;
-        // put it in a new 1v1 editor box and show it. Read once, then cleared.
-        function openImportedStrategy() {
+        // A strategy sent from the Hub page's "Open in Practice" button arrives in sessionStorage.
+        // A bot or practice strategy goes into a new 1v1 editor box. A classmate's strategy has no
+        // code here (it stays hidden), so it is ticked as an opponent in the 1v1 list instead.
+        // Read once, then cleared.
+        async function openImportedStrategy(galleryLoaded) {
             let imported = null;
             try {
                 imported = JSON.parse(sessionStorage.getItem('ipd_practice_import') || 'null');
                 sessionStorage.removeItem('ipd_practice_import');
             } catch (e) { imported = null; }
+            if (imported && imported.hidden && imported.website_id !== undefined) {
+                try { await galleryLoaded; } catch (e) {}
+                switchPracticeTab('practice1v1');
+                const players = (GALLERY['1v1'] || {}).players || [];
+                const idx = players.findIndex(p => String(p.id) === String(imported.website_id));
+                const cb = idx >= 0 ? document.getElementById(`chk_1v1_player_${idx}`) : null;
+                if (cb) {
+                    cb.checked = true;
+                    cb.closest('.part-row').scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+                return;
+            }
             if (!imported || typeof imported.code !== 'string' || !imported.code.trim()) return;
             switchPracticeTab('practice1v1');
             addStrategy();
@@ -1688,7 +1711,7 @@
             }
 
             const roster = collectLocalRows('npStrategy', npStrategyCount).concat(collectSelectedParticipants('nplayer'));
-            const strategies = roster.map(r => ({ name: r.name, code: r.code }));
+            const strategies = roster.map(participantPayload);
             if (strategies.length < 2) { alert("Select at least 2 participants"); return; }
 
             // No cap — but warn with a rough estimate before a large run (parity with 1v1).
@@ -1949,7 +1972,7 @@
             if (!(numCores >= 2 && numCores <= 8)) { alert('Number of cores must be between 2 and 8'); return; }
 
             const roster = collectLocalRows('osStrategy', osStrategyCount).concat(collectSelectedParticipants('os'));
-            const strategies = roster.map(r => ({ name: r.name, code: r.code }));
+            const strategies = roster.map(participantPayload);
             if (strategies.length < 2) { alert('Select at least 2 participants!'); return; }
 
             // Validity before cost: heterogeneous places one distinct strategy per core, so fewer

@@ -91,8 +91,11 @@
         <!-- Imported code panel -->
         <div class="card" id="importPanel" style="display:none;">
             <h3><i class="fas fa-download"></i> Imported: <span id="importName"></span></h3>
-            <p>Screened and accepted by this machine's sandbox. Open it in the Practice editor to play
+            <p id="importText">Screened and accepted by this machine's sandbox. Open it in the Practice editor to play
             against it, or copy the code.</p>
+            <p id="importHiddenText" style="display:none;"><i class="fas fa-eye-slash"></i> This is a classmate's
+            strategy, so its code stays hidden. It passed this machine's sandbox, and you can play against it:
+            Open in Practice ticks it as an opponent in 1v1 (it is also in the N-Player and OS Simulation lists).</p>
             <textarea id="importCode" class="hub-field" readonly></textarea>
             <button id="openPracticeBtn" class="btn-success"><i class="fas fa-arrow-right"></i> Open in Practice</button>
             <button id="copyBtn" class="btn-primary"><i class="fas fa-copy"></i> Copy code</button>
@@ -189,13 +192,22 @@
             finally { btn.disabled = false; }
         }
 
+        // The last imported strategy: {name, id, hidden}. A classmate's (hidden) strategy has no
+        // code on this page, so the code box and Copy button are hidden for it.
+        let lastImport = null;
         async function importStrategy(id) {
             try {
                 const resp = await fetch('/hub/import/' + encodeURIComponent(id), { method: 'POST' });
                 const data = await resp.json();
                 if (!resp.ok) { throw new Error(data.error || 'Import failed'); }
+                const hidden = !!data.hidden;
+                lastImport = { name: data.name, id: data.id !== undefined ? data.id : id, hidden };
                 document.getElementById('importName').textContent = data.name;
-                document.getElementById('importCode').value = data.code;
+                document.getElementById('importCode').value = hidden ? '' : (data.code || '');
+                document.getElementById('importCode').style.display = hidden ? 'none' : '';
+                document.getElementById('copyBtn').style.display = hidden ? 'none' : '';
+                document.getElementById('importText').style.display = hidden ? 'none' : '';
+                document.getElementById('importHiddenText').style.display = hidden ? '' : 'none';
                 document.getElementById('importPanel').style.display = 'block';
                 if (data.flagged) {
                     showMsg('Imported "' + data.name + '" — ⚠ an admin FLAGGED this strategy'
@@ -245,8 +257,11 @@
         document.getElementById('openPracticeBtn').addEventListener('click', () => {
             const name = document.getElementById('importName').textContent;
             const code = document.getElementById('importCode').value;
+            // A classmate's strategy travels by id only; its code never leaves the app.
+            const payload = (lastImport && lastImport.hidden)
+                ? { name, website_id: lastImport.id, hidden: true } : { name, code };
             try {
-                sessionStorage.setItem('ipd_practice_import', JSON.stringify({ name, code }));
+                sessionStorage.setItem('ipd_practice_import', JSON.stringify(payload));
             } catch (e) {
                 showMsg('Could not pass the strategy to Practice in this browser — use "Copy code" instead.', false, 'importMsg');
                 return;
