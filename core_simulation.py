@@ -486,15 +486,16 @@ class OSSimulator:
         # Per-process hot working set (varies by job; falls back to 4 KB if unset).
         working_set_size = getattr(process, 'working_set_size', 4096)
         rng = getattr(process, 'mem_rng', None) or self.task_rng
-        num_accesses = rng.randint(2, 5)
+        # rng.randint(a, b) is exactly a + rng._randbelow(b - a + 1) (CPython 3.12 to 3.14), so
+        # calling it directly draws the same numbers with less overhead. This runs every tick.
+        below, rand = rng._randbelow, rng.random
+        num_accesses = 2 + below(4)                                   # randint(2, 5)
         addresses = []
         for _ in range(num_accesses):
-            if rng.random() < 0.7 and addresses:
-                base = addresses[-1]
-                offset = rng.randint(-128, 128)
-                address = max(working_set_base, base + offset)
+            if rand() < 0.7 and addresses:
+                address = max(working_set_base, addresses[-1] - 128 + below(257))   # randint(-128, 128)
             else:
-                address = working_set_base + rng.randint(0, working_set_size - 1)
+                address = working_set_base + below(working_set_size)  # randint(0, size - 1)
             addresses.append(address)
         return addresses
 
