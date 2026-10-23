@@ -1034,14 +1034,21 @@
             // Which list the classmates came from (live, or a snapshot frozen for judging).
             const pkg = { kind, name, result, participants, local_bots, flags, gallery_source: GALLERY_SOURCE };
             status.textContent = 'Staging to website…';
+            // Open the tab now, while the click still counts: browsers block a window.open
+            // made after the await. It is pointed at the publish page once staging is done.
+            const tab = window.open('', '_blank');
             try {
                 const resp = await fetch('/hub/publish-result', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pkg) });
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.error || 'Publish failed');
-                window.open(data.publish_url, '_blank');
-                status.innerHTML = '<span style="color:var(--success-color)">Opened the website publish page — log in (admin) and confirm.</span>';
-            } catch (e) { status.innerHTML = '<span style="color:var(--danger-color)">' + escHtml(e.message) + '</span>'; }
+                if (tab) tab.location = data.publish_url;
+                status.innerHTML = '<span style="color:var(--success-color)">Staged. <a href="' + escHtml(data.publish_url)
+                    + '" target="_blank" rel="noopener">Open the website publish page</a>, log in (admin) and confirm.</span>';
+            } catch (e) {
+                if (tab) tab.close();
+                status.innerHTML = '<span style="color:var(--danger-color)">' + escHtml(e.message) + '</span>';
+            }
         }
 
         async function startTournament() {
