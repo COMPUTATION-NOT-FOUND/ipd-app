@@ -133,11 +133,38 @@ def list_practice_strategies():
     return data.get('strategies', data) if isinstance(data, dict) else data
 
 
+def _without_round_logs(value):
+    """Copy of `value` without the per-round move logs. They are ~99% of a full run's size,
+    push it past the website's 256 KB request cap, and the published result never shows them."""
+    if isinstance(value, dict):
+        return {k: _without_round_logs(v) for k, v in value.items() if k != 'rounds_detail'}
+    if isinstance(value, list):
+        return [_without_round_logs(v) for v in value]
+    return value
+
+
+# The match fields the published 1v1 page reads (head-to-head grid, error notes). The per-mode
+# breakdown is dropped: matches grow with players squared, so a full class would not fit.
+_MATCH_SUMMARY_KEYS = ('player_a', 'player_b', 'a_points', 'b_points', 'winner', 'void',
+                       'error', 'error_player')
+
+
+def _compact_package(package):
+    package = _without_round_logs(package)
+    result = package.get('result')
+    if package.get('kind', '1v1') == '1v1' and isinstance(result, dict) \
+            and isinstance(result.get('matches'), list):
+        result['matches'] = [{k: m[k] for k in _MATCH_SUMMARY_KEYS if k in m}
+                             if isinstance(m, dict) else m for m in result['matches']]
+    return package
+
+
 def stage_result(package):
     """Stage a locally-run tournament result on the website for admin publishing.
     Returns the draft_id. Uses the shared class token (no per-user auth); the actual
     publish on the website is admin-login-gated."""
     _require_enabled()
+    package = _compact_package(package)
     try:
         resp = requests.post(f'{HUB_BASE_URL}/api/result-draft', json=package,
                              headers=_headers(), timeout=_TIMEOUT)
