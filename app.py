@@ -8,6 +8,7 @@ import math
 import logging
 import os
 import sys
+import threading
 import time
 import uuid
 from urllib.parse import urlsplit
@@ -1453,18 +1454,57 @@ def _resolve_website_strategies(strategies):
 LOCAL_GALLERY_PATH = os.path.join(DATA_DIR, 'local_gallery.json')
 
 
+# Saves and deletes are read-modify-write, so they hold this lock; the file itself is written to a
+# temporary file and swapped in, with the previous good copy kept as .bak. Before this, rapid
+# saves could lose entries or leave half-written JSON, which then read as an empty gallery and
+# was overwritten by the next save (review, Oct 2026).
+_LOCAL_GALLERY_LOCK = threading.Lock()
+
+
+class LocalGalleryUnreadable(Exception):
+    """local_gallery.json (and its backup) exist but can't be read; never overwrite them."""
+
+
+def _load_gallery_file(path):
+    with open(path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    if not isinstance(data, list):
+        raise ValueError('not a list')
+    return data
+
+
 def _read_local_gallery():
+    """The saved strategies. A missing file is an empty gallery; a damaged one falls back to the
+    backup, and if that is damaged too raises LocalGalleryUnreadable instead of returning []."""
     try:
-        with open(LOCAL_GALLERY_PATH, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        return data if isinstance(data, list) else []
-    except (FileNotFoundError, ValueError, OSError):
+        return _load_gallery_file(LOCAL_GALLERY_PATH)
+    except FileNotFoundError:
         return []
+    except (ValueError, OSError) as e:
+        app.logger.error(f"local_gallery.json is unreadable ({e}); trying the backup")
+    try:
+        return _load_gallery_file(LOCAL_GALLERY_PATH + '.bak')
+    except (FileNotFoundError, ValueError, OSError):
+        raise LocalGalleryUnreadable(LOCAL_GALLERY_PATH) from None
 
 
 def _write_local_gallery(strategies):
-    with open(LOCAL_GALLERY_PATH, 'w', encoding='utf-8') as f:
+    tmp = LOCAL_GALLERY_PATH + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(strategies, f)
+        f.flush()
+        os.fsync(f.fileno())
+    try:
+        _load_gallery_file(LOCAL_GALLERY_PATH)
+        os.replace(LOCAL_GALLERY_PATH, LOCAL_GALLERY_PATH + '.bak')
+    except (FileNotFoundError, ValueError, OSError):
+        pass   # no good current copy to keep; leave any older backup alone
+    os.replace(tmp, LOCAL_GALLERY_PATH)
+
+
+_GALLERY_UNREADABLE_MSG = ('Your saved strategies file (local_gallery.json) is damaged and could not '
+                           'be read, so nothing was changed. Open it from the app data folder to '
+                           'recover your code, or move it away to start a new one.')
 
 
 @app.route('/hub', methods=['GET'])
@@ -1815,16 +1855,19 @@ def save_strategy():
         return jsonify({'error': f'Strategy failed the safety check: {screen_err}'}), 400
 
     try:
-        gallery = _read_local_gallery()
-        gallery = [s for s in gallery if s.get('name') != name]   # overwrite same-named entry
-        gallery.append({
-            'id': 'local_' + sha256_text(name)[:16],
-            'name': name,
-            'code': code,
-            'type': 'local',
-            'source': 'local',
-        })
-        _write_local_gallery(gallery)
+        with _LOCAL_GALLERY_LOCK:
+            gallery = _read_local_gallery()
+            gallery = [s for s in gallery if s.get('name') != name]   # overwrite same-named entry
+            gallery.append({
+                'id': 'local_' + sha256_text(name)[:16],
+                'name': name,
+                'code': code,
+                'type': 'local',
+                'source': 'local',
+            })
+            _write_local_gallery(gallery)
+    except LocalGalleryUnreadable:
+        return jsonify({'error': _GALLERY_UNREADABLE_MSG}), 500
     except OSError as e:
         app.logger.error(f"Could not write local gallery: {e}")
         return jsonify({'error': 'Could not save strategy — disk write failed.'}), 500
@@ -1836,7 +1879,10 @@ def save_strategy():
 @login_required
 def local_gallery_list():
     """Return the machine-local saved strategies (for the participant checklist / import)."""
-    return jsonify({'strategies': _read_local_gallery()})
+    try:
+        return jsonify({'strategies': _read_local_gallery()})
+    except LocalGalleryUnreadable:
+        return jsonify({'strategies': [], 'error': _GALLERY_UNREADABLE_MSG})
 
 
 @app.route('/local-gallery/delete', methods=['POST'])
@@ -1850,9 +1896,12 @@ def local_gallery_delete():
     if not sid and not name:
         return jsonify({'error': 'Provide an id or name to delete.'}), 400
     try:
-        gallery = _read_local_gallery()
-        kept = [s for s in gallery if s.get('id') != sid and s.get('name') != name]
-        _write_local_gallery(kept)
+        with _LOCAL_GALLERY_LOCK:
+            gallery = _read_local_gallery()
+            kept = [s for s in gallery if s.get('id') != sid and s.get('name') != name]
+            _write_local_gallery(kept)
+    except LocalGalleryUnreadable:
+        return jsonify({'error': _GALLERY_UNREADABLE_MSG}), 500
     except OSError as e:
         app.logger.error(f"Could not write local gallery: {e}")
         return jsonify({'error': 'Could not update local gallery — disk write failed.'}), 500

@@ -1325,7 +1325,10 @@
         // and after each local save; kept separate from the website-backed GALLERY pools.
         let LOCAL_STRATS = [];
         async function loadLocalGallery() {
-            try { const r = await fetch('/local-gallery/list'); const d = await r.json(); LOCAL_STRATS = d.strategies || []; }
+            try {
+                const r = await fetch('/local-gallery/list'); const d = await r.json(); LOCAL_STRATS = d.strategies || [];
+                if (d.error) alert(d.error);   // damaged save file: say so rather than show an empty list
+            }
             catch(e) { LOCAL_STRATS = []; }
         }
         async function deleteLocalStrategy(id, name) {

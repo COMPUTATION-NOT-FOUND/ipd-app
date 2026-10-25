@@ -101,5 +101,7 @@ practice_cache.json
 
 # User's private, machine-local saved strategies ("Save locally"). Never commit.
 local_gallery.json
+local_gallery.json.bak
+local_gallery.json.tmp
 # Which list the gallery cache holds (live submissions or a snapshot)
 gallery_source.json
