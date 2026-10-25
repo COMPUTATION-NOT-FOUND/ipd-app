@@ -58,6 +58,29 @@ def describe_strategy_error(exc):
     return f"{type(exc).__name__}: {exc}"
 
 
+def referenced_names(code):
+    """Names the code reads anywhere (calls, `key=helper`, ...). A helper is referenced by the
+    function that uses it; the real entry point usually isn't referenced at all, so the strategy
+    pickers try unreferenced functions first (review, Oct 2026: a 4-arg helper defined above the
+    4-arg strategy was picked instead of it). A function calling itself (recursion) doesn't
+    count. Empty set if the code doesn't parse."""
+    import ast
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError, TypeError):
+        return set()
+
+    def loads(node):
+        return {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    used = set()
+    for stmt in tree.body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            used |= loads(stmt) - {stmt.name}
+        else:
+            used |= loads(stmt)
+    return used
+
+
 def call_strategy(
     strategy_func: Callable,
     last_moves: list[str],

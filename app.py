@@ -93,7 +93,7 @@ from audit_utils import log_audit_event, get_request_context
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from payoff_models import PairwiseMatrixPayoff, PublicGoodsPayoff, KCooperatorTensorPayoff
-from n_player_simulation import group_tournament, call_strategy, validate_move, describe_strategy_error
+from n_player_simulation import group_tournament, call_strategy, validate_move, describe_strategy_error, referenced_names
 from tournament_package import sha256_text, canonical_json
 from ranking import normalize_ranking, rank_entries, describe_ranking, DEFAULT_RANKING
 import code_vault
@@ -910,9 +910,14 @@ def extract_strategy_function(code, globals_dict, prefer_n_args=3):
         # that defines a helper above its 3-arg entry point has the HELPER selected as the
         # strategy (and then fails with a TypeError on the first round), because the caller
         # asks for prefer_n_args=4. Mirrors extract_strategy_func() in core_simulation.py.
+        # Within one arity, a function no other code refers to comes first: a helper with the
+        # same arity is called by the strategy, the strategy itself is not. Otherwise the first.
         if function_names:
+            used = referenced_names(code)
+            ordered = ([n for n in function_names if n not in used]
+                       + [n for n in function_names if n in used])
             for n_args in (prefer_n_args, 4, 3):
-                for func_name in function_names:
+                for func_name in ordered:
                     if (function_signatures.get(func_name) == n_args
                             and func_name in globals_dict
                             and callable(globals_dict[func_name])):

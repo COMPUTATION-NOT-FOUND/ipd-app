@@ -7,7 +7,7 @@ from cache_model import build_core_hierarchies
 from schedulers import build_scheduler
 from n_player_simulation import (call_strategy, run_with_limit, validate_move,
                                  describe_strategy_error, InstructionLimitExceeded,
-                                 EngineTraceError, release_tracer)
+                                 EngineTraceError, release_tracer, referenced_names)
 from ranking import normalize_ranking, rank_entries, describe_ranking
 
 
@@ -222,6 +222,10 @@ def extract_strategy_func(code, seed=None):
                  if callable(obj) and not name.startswith('__') and name not in injected]
         if not funcs:
             return None
+        # Functions no other code refers to first (a same-arity helper is called by the strategy,
+        # the strategy itself is not); sorted() is stable, so definition order breaks ties.
+        used = referenced_names(code)
+        funcs = sorted(funcs, key=lambda f: getattr(f, '__name__', '') in used)
         # Prefer the unified 4-arg signature, then the legacy 3-arg, then the first
         # user function — so one 4-arg strategy works across 1v1 / N-player / OS sim.
         for n in (4, 3):
