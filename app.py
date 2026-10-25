@@ -894,14 +894,14 @@ def game(player_a_code, player_a_name, player_b_code, player_b_name, rounds=200,
     # Each player reads its own copy, so one strategy can't change the table the other one sees.
     import copy as _copy
     player_info = [_copy.deepcopy(tournament_info), _copy.deepcopy(tournament_info)]
-    
-    exec_context = {'TOURNAMENT_INFO': tournament_info}
 
     # Execute the strategy codes in isolated scopes to extract function names
     # Security note: globals() access in strategies is best-effort sandboxing.
     # Untrusted code should be reviewed; see is_safe_code() for restrictions.
-    player_a_globals = get_safe_globals(exec_context, rng)
-    player_b_globals = get_safe_globals(exec_context, rng)
+    # The module-level TOURNAMENT_INFO is a private copy too: its 'payoff_matrix' is the very table
+    # this function scores with, so sharing it let a strategy rewrite its own payoffs.
+    player_a_globals = get_safe_globals({'TOURNAMENT_INFO': _copy.deepcopy(tournament_info)}, rng)
+    player_b_globals = get_safe_globals({'TOURNAMENT_INFO': _copy.deepcopy(tournament_info)}, rng)
     
     # Execute Player A code
     try:
