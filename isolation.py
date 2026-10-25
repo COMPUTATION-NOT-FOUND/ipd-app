@@ -35,15 +35,13 @@ except (TypeError, ValueError):
 
 
 def _mp_context():
-    """Prefer the ``fork`` start method where available (Linux/macOS): the child is a copy of the
-    already-running app, so screening adds no per-strategy import cost and needs no __main__ guard.
-    Windows has no fork, so fall back to the platform default (spawn), which re-imports app.py in
-    the child — correct, just slower. (Py 3.14 defaults to forkserver, which re-imports the *main*
-    module and breaks when that isn't importable, so we never rely on the default on Linux.)"""
-    try:
-        return mp.get_context('fork')
-    except ValueError:
-        return mp.get_context()
+    """``spawn`` everywhere, as parallel.py does. Forking the threaded web server copies locks other
+    threads hold (the logging lock, for one) into the child, where they stay locked, so a strategy
+    that errored at the wrong moment could deadlock its screen and be reported as a timeout instead
+    of a crash (review, Oct 2026). Spawn re-imports app.py in the child: slower, always correct, and
+    what Windows already used. Never the platform default: Py 3.14 on Linux defaults to
+    forkserver, which re-imports the *main* module and breaks when that isn't importable."""
+    return mp.get_context('spawn')
 
 
 def _screen_worker(code, name, rounds, q):

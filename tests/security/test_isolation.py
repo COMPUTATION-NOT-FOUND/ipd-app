@@ -72,3 +72,9 @@ def test_sandbox_shortfall_names_how_many_were_left_out(client):
     data = resp.get_json()
     assert data['error'].startswith('Sandbox mode left out 1 strategy ')
     assert [f['name'] for f in data['flags']] == ['Boom']
+
+
+def test_screening_uses_spawn_not_fork():
+    # Forking the threaded server can copy held locks into the child (review, Oct 2026).
+    import isolation
+    assert isolation._mp_context().get_start_method() == 'spawn'
