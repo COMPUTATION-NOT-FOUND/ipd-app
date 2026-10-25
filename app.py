@@ -503,7 +503,11 @@ def validate_name(name, field_type="name"):
         if not re.match(r"^[a-zA-Z0-9 _\-']+$", name):
             return False, f"{field_type.capitalize()} contains invalid characters"
     
-    # Check for suspicious XSS patterns (case-insensitive)
+    # Check for suspicious XSS patterns (case-insensitive). Skipped for the strict-charset names
+    # above, which can't hold markup anyway; the word list there only rejected honest names like
+    # "Postscript Bot" or "Subscriber" (review, Oct 2026).
+    if field_type in ('name', 'strategy name', 'bot name'):
+        return True, ""
     suspicious_patterns = [
         r'script',
         r'javascript:',
