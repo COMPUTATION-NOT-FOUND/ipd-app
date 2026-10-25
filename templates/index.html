@@ -657,19 +657,21 @@
         // Configured class website base URL (blank if the Hub isn't set up); used for handoff links.
         const HUB_BASE_URL = {{ hub_base_url | tojson }};
 
-        // When the server session expires, @login_required redirects API calls (302) to the login
-        // page, so a fetch() silently receives the login HTML instead of JSON. Detect that and send
-        // the browser to /login (matching the admin page) rather than failing with a parse error.
+        // If a server session ever expires, @login_required redirects API calls (302) to the login
+        // page and fetch() silently receives the login HTML. Go to /login only in that case. Any
+        // other HTML reply (a server error page) is reported in place: navigating to the request's
+        // own URL gave a 405 page and threw away the code in the editors.
         async function readJsonOrRedirect(response) {
             const contentType = (response && response.headers && response.headers.get('content-type')) || '';
-            if (response && (response.redirected || contentType.includes('text/html'))) {
-                try { window.location = response.url || '/login'; } catch (e) { /* ignore */ }
+            let toLogin = false;
+            try { toLogin = response.redirected && new URL(response.url).pathname === '/login'; } catch (e) { /* ignore */ }
+            if (toLogin) {
+                window.location = '/login';
                 throw new Error('Session expired — redirecting to login…');
             }
             if (!contentType.includes('application/json')) {
-                let snippet = '';
-                try { snippet = (await response.text() || '').slice(0, 200); } catch (e) { /* ignore */ }
-                throw new Error('Unexpected server response (non-JSON).' + (snippet ? (' ' + snippet) : ''));
+                throw new Error('The app hit an unexpected error (HTTP ' + response.status + '). '
+                    + 'Your code is still in the editor.');
             }
             return await response.json();
         }
@@ -1052,7 +1054,13 @@
         }
 
         async function startTournament() {
-            const rounds = parseInt(document.getElementById('rounds').value) || 200;
+            // Check the form before sending: an empty or non-number box used to crash the request.
+            const rounds = Number(document.getElementById('rounds').value);
+            if (!Number.isInteger(rounds) || rounds < 1) { alert('Rounds must be a whole number of at least 1.'); return; }
+            const payoffMatrix = getPayoffMatrix();
+            if (Object.values(payoffMatrix).flat().some(v => !Number.isFinite(v))) {
+                alert('Payoff values must be numbers. Fill in every box of the payoff table.'); return;
+            }
 
             // Roster = your editable local players + the participants ticked in the checklist
             // (players/practice unique; bots may be replicated). Imported code is never edited.
@@ -1080,8 +1088,8 @@
             const seedInput = document.getElementById('seed').value;
             const tournamentData = {
                 strategies: strategies,
-                rounds: document.getElementById('rounds').value,
-                payoff_matrix: getPayoffMatrix(),
+                rounds: rounds,
+                payoff_matrix: payoffMatrix,
                 modes: modes,
                 discount_factor: parseFloat(document.getElementById('discount_factor').value),
                 stochastic_prob: parseFloat(document.getElementById('stochastic_prob').value),

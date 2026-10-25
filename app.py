@@ -354,6 +354,18 @@ def _enforce_local_only_and_inject_owner():
         session['user'] = dict(LOCAL_OWNER)
 
 
+@app.errorhandler(500)
+def _json_server_error(e):
+    """Script calls get a JSON error instead of Flask's HTML 500 page. The page treated any HTML
+    reply as a lost session and navigated away, which discarded the editor content (review,
+    Oct 2026). The message stays generic: internal Python errors are logged, not shown."""
+    if request.method == 'GET' and not request.is_json:
+        return e
+    app.logger.error(f"Unhandled error on {request.path}: {getattr(e, 'original_exception', e)!r}")
+    return jsonify({'error': 'The app hit an unexpected error. Your code was not changed; '
+                             'check the settings and try again.'}), 500
+
+
 @app.context_processor
 def _inject_csp_nonce():
     """Make {{ csp_nonce }} available in every template."""
@@ -485,6 +497,70 @@ def validate_name(name, field_type="name"):
 def _is_truthy(v):
     """Interpret a JSON-ish flag (bool/str/int) as a boolean."""
     return str(v).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def parse_rounds(raw, default=200):
+    """Rounds from a form value. Returns (rounds, error_message); an empty box or a stray '-'
+    used to reach int() and crash the request (review, Oct 2026)."""
+    if raw is None:
+        return default, None
+    if isinstance(raw, bool):
+        return None, 'Rounds must be a whole number.'
+    try:
+        rounds = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None, 'Rounds must be a whole number.'
+    if rounds < 1:
+        return None, 'Rounds must be at least 1'
+    return rounds, None
+
+
+def _is_finite_number(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def check_payoff_matrix(payoff_matrix):
+    """None (use the default) or all four of CC/CD/DC/DD as pairs of finite numbers.
+    A missing or blank entry used to crash mid-match or score silently wrong. Returns
+    (is_valid, error_message)."""
+    if payoff_matrix is None:
+        return True, None
+    if not isinstance(payoff_matrix, dict):
+        return False, 'Payoff table must have the entries CC, CD, DC and DD.'
+    for key in ('CC', 'CD', 'DC', 'DD'):
+        pair = payoff_matrix.get(key)
+        if (not isinstance(pair, (list, tuple)) or len(pair) != 2
+                or not all(_is_finite_number(v) for v in pair)):
+            return False, f'Payoff values must be numbers (check the {key} entry).'
+    return True, None
+
+
+def check_payoff_model(config):
+    """Validate an N-Player payoff model config before it reaches the engine, so a bad value
+    gets a plain message rather than a Python error or a 'Failed to compile strategy' that
+    blames the student's code. Returns (is_valid, error_message)."""
+    if config is None:
+        return True, None
+    if not isinstance(config, dict):
+        return False, 'Payoff model must be an object with a "type".'
+    model_type = config.get('type', 'pairwise_matrix')
+    if model_type == 'public_goods':
+        for key in ('b', 'c', 'alpha'):
+            if key in config and config[key] is not None and not _is_finite_number(config[key]):
+                return False, f'Payoff model value "{key}" must be a number.'
+        nonlinear = config.get('nonlinear')
+        if isinstance(nonlinear, dict) and nonlinear.get('alpha') is not None \
+                and not _is_finite_number(nonlinear['alpha']):
+            return False, 'Payoff model value "alpha" must be a number.'
+    elif model_type == 'pairwise_matrix':
+        return check_payoff_matrix(config.get('payoff_matrix'))
+    elif model_type == 'kcoop_tensor':
+        for key in ('u_C', 'u_D'):
+            arr = config.get(key)
+            if arr is not None and (not isinstance(arr, list)
+                                    or not all(_is_finite_number(v) for v in arr)):
+                return False, f'Payoff model "{key}" must be a list of numbers.'
+    return True, None
 
 
 def check_unique_strategy_names(strategies):
@@ -2120,13 +2196,19 @@ def round_robin_tournament(strategies, rounds=200, payoff_matrix=None, modes=Non
 @limiter.limit("20 per minute")
 def play_game():
     data = request.json
+    rounds, rounds_error = parse_rounds(data.get('rounds'))
+    if rounds_error:
+        return jsonify({'error': rounds_error}), 400
+    ok, payoff_error = check_payoff_matrix(data.get('payoff_matrix'))
+    if not ok:
+        return jsonify({'error': payoff_error}), 400
     # Basic play route uses standard mode by default
     result = game(
         data['player_a_code'],
         data['player_a_name'],
         data['player_b_code'],
         data['player_b_name'],
-        int(data.get('rounds', 200)),
+        rounds,
         data.get('payoff_matrix', None),
         mode='standard'
     )
@@ -2144,8 +2226,13 @@ def run_tournament():
     strategies, resolve_error = _resolve_website_strategies(strategies)
     if resolve_error:
         return jsonify({'error': resolve_error}), 400
-    rounds = int(data.get('rounds', 200))
+    rounds, rounds_error = parse_rounds(data.get('rounds'))
+    if rounds_error:
+        return jsonify({'error': rounds_error}), 400
     payoff_matrix = data.get('payoff_matrix', None)
+    ok, payoff_error = check_payoff_matrix(payoff_matrix)
+    if not ok:
+        return jsonify({'error': payoff_error}), 400
 
     # Validate strategies list
     if not isinstance(strategies, list):
@@ -2155,9 +2242,7 @@ def run_tournament():
         return jsonify({'error': 'At least 2 strategies required for tournament'}), 400
 
     # No strategy/round caps on the local app — it's the user's own machine (the UI shows a
-    # pre-run time estimate). Keep the lower bound only.
-    if rounds < 1:
-        return jsonify({'error': 'Rounds must be at least 1'}), 400
+    # pre-run time estimate). parse_rounds keeps the lower bound only.
 
     # Validate strategy names
     for strategy in strategies:
@@ -2279,10 +2364,15 @@ def nplayer_tournament():
     strategies, resolve_error = _resolve_website_strategies(strategies)
     if resolve_error:
         return jsonify({'error': resolve_error}), 400
-    rounds = int(data.get('rounds', 200))
+    rounds, rounds_error = parse_rounds(data.get('rounds'))
+    if rounds_error:
+        return jsonify({'error': rounds_error}), 400
     seed = data.get('seed', None)
     group_size = data.get('group_size', None)
     payoff_model_config = data.get('payoff_model', None)
+    ok, payoff_error = check_payoff_model(payoff_model_config)
+    if not ok:
+        return jsonify({'error': payoff_error}), 400
     weights = data.get('weights', None)
     mode = data.get('mode', 'standard')
     modes = data.get('modes', None)
