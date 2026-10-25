@@ -10,6 +10,7 @@ import os
 import sys
 import time
 import uuid
+from urllib.parse import urlsplit
 from random import randint
 from itertools import combinations
 from logging_config import setup_logging
@@ -329,7 +330,26 @@ def _assign_csp_nonce():
 # request as the local owner with NO credentials). This is the single place that assumption is
 # pinned down, so it still holds if the server is ever bound to 0.0.0.0 (e.g. `waitress-serve`
 # without --host).
-_LOOPBACK_ADDRS = frozenset({'127.0.0.1', '::1', 'localhost'})
+_LOOPBACK_ADDRS = frozenset({'127.0.0.1', '::1'})
+# Host names the app's own page uses. Checking the Host header blocks DNS rebinding: a website the
+# student visits can point its own name at 127.0.0.1, and its requests then carry that name.
+_LOOPBACK_HOSTS = frozenset({'127.0.0.1', 'localhost', '::1'})
+
+
+def _is_loopback_addr(addr):
+    """A dual-stack socket can present IPv4 loopback as ::ffff:127.0.0.1."""
+    addr = (addr or '').lower()
+    if addr.startswith('::ffff:'):
+        addr = addr[len('::ffff:'):]
+    return addr in _LOOPBACK_ADDRS
+
+
+def _host_name(host):
+    """'127.0.0.1:5000' -> '127.0.0.1', '[::1]:5000' -> '::1', 'localhost' -> 'localhost'."""
+    host = (host or '').strip().lower()
+    if host.startswith('['):
+        return host[1:].split(']', 1)[0]
+    return host.rsplit(':', 1)[0] if host.count(':') == 1 else host
 
 # Opt-in escape hatch: set ALLOW_LAN=true only if you deliberately want to reach this app from
 # another device AND understand that doing so grants that device the local owner's (admin) access.
@@ -348,8 +368,16 @@ def _enforce_local_only_and_inject_owner():
     when LOCAL_MODE is off (then the real auth boundary — the website — applies)."""
     if not LOCAL_MODE:
         return
-    if request.remote_addr not in _LOOPBACK_ADDRS and not ALLOW_LAN:
-        abort(403)
+    if not ALLOW_LAN:
+        if not _is_loopback_addr(request.remote_addr):
+            abort(403)
+        if _host_name(request.host) not in _LOOPBACK_HOSTS:
+            abort(403)
+        # A data-changing request from another site's page carries that site's Origin.
+        origin = request.headers.get('Origin')
+        if (origin and request.method not in ('GET', 'HEAD', 'OPTIONS')
+                and _host_name(urlsplit(origin).netloc) not in _LOOPBACK_HOSTS):
+            abort(403)
     if 'user' not in session:
         session['user'] = dict(LOCAL_OWNER)
 
