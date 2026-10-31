@@ -3064,7 +3064,7 @@ def os_simulation():
     from core_simulation import TASK_COUNT_CHOICES, WARMUP_CHOICES, MAX_RUNS
     try:
         runs = int(data.get('runs', 10))
-        num_processes = int(data.get('num_processes', 50))
+        num_processes = int(data.get('num_processes', 100))
         warmup = float(data.get('warmup', 0))
     except (TypeError, ValueError):
         return jsonify({'error': 'runs, num_processes and warmup must be numbers'}), 400

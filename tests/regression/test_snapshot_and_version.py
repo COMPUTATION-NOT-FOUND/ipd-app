@@ -27,7 +27,7 @@ def test_every_website_call_sends_the_app_version(monkeypatch):
     monkeypatch.setattr(hub_client.requests, 'get', fake_get)
     monkeypatch.setattr(hub_client, 'HUB_BASE_URL', 'https://site.example')
     hub_client.list_strategies()
-    assert seen['headers']['X-IPD-App-Version'] == APP_VERSION == '1.4.3'
+    assert seen['headers']['X-IPD-App-Version'] == APP_VERSION == '1.5.0'
 
 
 def test_too_old_message_from_the_website_is_shown_as_is(monkeypatch):
