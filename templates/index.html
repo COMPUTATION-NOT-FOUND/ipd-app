@@ -318,7 +318,7 @@
                 <!-- Public Goods Fields -->
                 <div id="np_pg_fields">
                     <div style="display: flex; gap: 15px; margin-bottom: 10px;">
-                        <div style="flex: 1;"><label>Benefit (b):</label><input type="number" id="np_pg_b" value="2.0" step="0.1" style="width: 100%;"></div>
+                        <div style="flex: 1;"><label>Benefit (b):</label><input type="number" id="np_pg_b" value="0.4" step="0.1" style="width: 100%;"></div>
                         <div style="flex: 1;"><label>Cost (c):</label><input type="number" id="np_pg_c" value="1.0" step="0.1" style="width: 100%;"></div>
                         <div style="flex: 1;">
                             <label>Nonlinear:</label>
@@ -931,6 +931,18 @@
 
         // After a sandbox-mode run, show which strategies were screened out (and why) at the top of
         // the results. `flags` is [{name, reason, detail}]; absent/empty when nothing was flagged.
+        // Payoff setups that are not a real dilemma (the run still went ahead).
+        function renderPayoffWarnings(containerId, warnings) {
+            const el = document.getElementById(containerId);
+            if (!el || !Array.isArray(warnings) || warnings.length === 0) return;
+            const rows = warnings.map(w => `<li>${escHtml(w)}</li>`).join('');
+            el.insertAdjacentHTML('afterbegin',
+                `<div class="results" style="border:1px solid var(--warning-color); background: rgba(234,179,8,0.10); margin-bottom:16px;">
+                    <h4 style="margin:0 0 8px 0; color: var(--warning-color);"><i class="fas fa-triangle-exclamation"></i> Check the payoffs</h4>
+                    <ul style="margin:0 0 0 18px;">${rows}</ul>
+                </div>`);
+        }
+
         function renderFlagsBanner(containerId, flags) {
             const el = document.getElementById(containerId);
             if (!el || !Array.isArray(flags) || flags.length === 0) return;
@@ -1136,6 +1148,7 @@
                 lastRoster1v1 = roster;
                 displayTournamentResults(result);
                 renderFlagsBanner('results', result.flags);
+                renderPayoffWarnings('results', result.warnings);
                 showSubmitPanel('1v1', result, roster);
             } catch (error) {
                 showRunError('results', null, 'Error: ' + error.message);
@@ -1754,6 +1767,7 @@
 
                 displayNPlayerTournamentResults(result);
                 renderFlagsBanner('nplayerResults', result.flags);
+                renderPayoffWarnings('nplayerResults', result.warnings);
                 showSubmitPanel('nplayer', result, roster);
             } catch(e) {
                 console.error(e);

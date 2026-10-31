@@ -582,6 +582,50 @@ def check_payoff_matrix(payoff_matrix):
     return True, None
 
 
+def payoff_warnings(payoff_matrix=None, payoff_model=None, group_size=None):
+    """Plain warnings (never errors) when a payoff setup is not a real dilemma. The run still
+    goes ahead: odd tables are fine for experiments, but students should know.
+
+    1v1 table, from the row player's side: T = DC, R = CC, P = DD, S = CD. A Prisoner's
+    Dilemma needs T > R > P > S, and 2R > T + S so taking turns to betray doesn't beat
+    cooperating. Public Goods (linear): each player gets b x (cooperators), a cooperator also
+    pays c, so it is a dilemma only when b < c < b x group size."""
+    out = []
+
+    def table(m, label):
+        try:
+            R, S, T, P = (float(m[k][0]) for k in ('CC', 'CD', 'DC', 'DD'))
+        except (KeyError, TypeError, ValueError, IndexError):
+            return
+        if not (T > R > P > S):
+            out.append(f'{label} is not a Prisoner\'s Dilemma: it needs DC > CC > DD > CD '
+                       f'(here {T:g}, {R:g}, {P:g}, {S:g}).')
+        if not (2 * R > T + S):
+            out.append(f'{label}: taking turns to betray ({T:g} + {S:g}) pays at least as much as '
+                       f'both cooperating (2 x {R:g}), so alternating can beat cooperation.')
+
+    if isinstance(payoff_matrix, dict):
+        table(payoff_matrix, 'The payoff table')
+    if isinstance(payoff_model, dict):
+        kind = payoff_model.get('type', 'pairwise_matrix')
+        if kind == 'pairwise_matrix' and isinstance(payoff_model.get('payoff_matrix'), dict):
+            table(payoff_model['payoff_matrix'], 'The pairwise payoff table')
+        elif kind == 'public_goods':
+            b = payoff_model.get('b', 0.4)
+            c = payoff_model.get('c', 1.0)
+            nonlinear = payoff_model.get('nonlinear')
+            linear = nonlinear in (None, 'linear') or (isinstance(nonlinear, dict)
+                                                        and nonlinear.get('type', 'linear') == 'linear')
+            if linear and _is_finite_number(b) and _is_finite_number(c):
+                if b >= c:
+                    out.append(f'Public Goods with b = {b:g} and c = {c:g}: cooperating always pays '
+                               f'(b is not below c), so there is no dilemma.')
+                if isinstance(group_size, int) and group_size > 1 and b * group_size <= c:
+                    out.append(f'Public Goods with b = {b:g}, c = {c:g} and groups of {group_size}: '
+                               f'everyone cooperating is no better than nobody (b x {group_size} is not above c).')
+    return out
+
+
 def check_payoff_model(config):
     """Validate an N-Player payoff model config before it reaches the engine, so a bad value
     gets a plain message rather than a Python error or a 'Failed to compile strategy' that
@@ -2412,6 +2456,7 @@ def run_tournament():
         if isolated:
             tournament_result['flags'] = screen_flags
             tournament_result['screened'] = True
+        tournament_result['warnings'] = payoff_warnings(payoff_matrix=payoff_matrix)
         return jsonify(tournament_result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -2432,7 +2477,7 @@ def nplayer_tournament():
         "group_size": 5,  # optional, defaults to all
         "payoff_model": {
             "type": "public_goods",  # or "pairwise_matrix"
-            "b": 2.0,
+            "b": 0.4,
             "c": 1.0,
             "nonlinear": {"type": "linear"}
         },
@@ -2731,6 +2776,9 @@ def nplayer_tournament():
         if isolated:
             result['flags'] = screen_flags
             result['screened'] = True
+        result['warnings'] = payoff_warnings(
+            payoff_model=payoff_model_config or {'type': 'pairwise_matrix'},
+            group_size=group_size or len(compiled_strategies))
         return jsonify(result)
     except Exception as e:
         app.logger.error(f"N-player tournament error: {str(e)}")
@@ -2757,7 +2805,7 @@ def parse_payoff_model(config):
     model_type = config.get('type', 'pairwise_matrix')
     
     if model_type == 'public_goods':
-        b = config.get('b', 2.0)
+        b = config.get('b', 0.4)
         c = config.get('c', 1.0)
         nonlinear = config.get('nonlinear', None)
         # Allow shorthand: nonlinear can be provided as a string (e.g. 'linear'/'power')
