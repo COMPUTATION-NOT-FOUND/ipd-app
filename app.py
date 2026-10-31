@@ -2524,6 +2524,10 @@ def nplayer_tournament():
     style, style_error = parse_style(data)
     if style_error:
         return jsonify({'error': style_error}), 400
+    # "All players in one group" leaves elimination with only a final, so it uses groups of 5
+    # (the sprint setting) unless a size is given.
+    if style == 'elimination' and group_size in (None, ''):
+        group_size = 5
 
     # Optional mode parameters for N-player
     try:

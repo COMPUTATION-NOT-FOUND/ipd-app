@@ -57,6 +57,7 @@ function eliminationBracketHtml(rounds, opts) {
             .elim-dq .elim-name { text-decoration: line-through; color: var(--danger-color, #dc3545); }
             .elim-wc { font-size: 0.7em; padding: 0 4px; border: 1px solid currentColor; border-radius: 3px; margin-left: 4px; }
         </style>
+        ${rounds.length === 1 ? `<p style="margin: 0 0 8px; color: var(--text-secondary); font-size: 0.9em;">All ${esc(rounds[0].players)} strategies fit in one group, so there was only a final and no earlier rounds. Add strategies or use a smaller group (fewer cores in the OS simulation) to see a full bracket.</p>` : ''}
         ${label ? `<p style="margin: 0 0 8px; color: var(--text-secondary); font-size: 0.9em;">Number on the right: ${esc(label)}. Green = moved on.</p>` : ''}
         <div class="elim-bracket">${cols}</div></div>`;
 }

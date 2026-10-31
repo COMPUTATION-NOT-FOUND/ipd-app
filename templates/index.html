@@ -269,7 +269,7 @@
                 <div>
                      <label style="display: block; margin-bottom: 5px; font-weight: bold;">Group Size:</label>
                      <input type="number" id="np_group_size" placeholder="All players" min="2" style="width: 100%; padding: 8px;">
-                     <small style="color: var(--text-secondary);">Empty = all players</small>
+                     <small style="color: var(--text-secondary);">Empty = all players (Legacy) or 5 (Elimination)</small>
                 </div>
                 <div>
                      <label style="display: block; margin-bottom: 5px; font-weight: bold;" for="np_style">Tournament style:</label>
@@ -1838,17 +1838,20 @@
             
             html += `</tbody></table></div>`;
 
-            // Upgraded multi-chart view (parity with 1v1 / OS sim). N-player has no pairwise
-            // head-to-head, so that matrix is omitted automatically by the renderer.
-            html += `<div class="chart-section" style="margin: 30px 0; padding: 20px; background: var(--bg-dark); border-radius: 8px;"><div id="pdChartsNplayer"></div></div>`;
-
-            const matches = Array.isArray(result.matches) ? result.matches : [];
+            // The bracket goes right under the leaderboard, before the charts, so it is easy to find.
             if (elim) {
                 html += `<div style="margin-top: 20px;"><h4>Bracket</h4>${eliminationBracketHtml(result.bracket, {
                     scoreLabel: 'points per round in that group',
                     score: p => (typeof p.points_per_round === 'number') ? p.points_per_round.toFixed(2) : '',
                 })}</div>`;
-            } else if (matches.length > 0) {
+            }
+
+            // Upgraded multi-chart view (parity with 1v1 / OS sim). N-player has no pairwise
+            // head-to-head, so that matrix is omitted automatically by the renderer.
+            html += `<div class="chart-section" style="margin: 30px 0; padding: 20px; background: var(--bg-dark); border-radius: 8px;"><div id="pdChartsNplayer"></div></div>`;
+
+            const matches = Array.isArray(result.matches) ? result.matches : [];
+            if (!elim && matches.length > 0) {
                 html += `<div class="match-results" style="margin-top: 20px;"><h4>Groups</h4>`;
                 matches.forEach((match) => {
                     const players = Array.isArray(match.players) ? match.players : [];
