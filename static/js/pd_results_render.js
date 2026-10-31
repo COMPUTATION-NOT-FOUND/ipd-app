@@ -73,7 +73,7 @@ function pdRankingOf(tournament) {
 function pdComputeScores(tournament) {
     const leaderboard = Array.isArray(tournament.leaderboard) ? tournament.leaderboard : [];
     const w = tournament.weights || {};
-    const wWin = w.win_rate ?? 0.33, wCoop = w.cooperation ?? 0.34, wPts = w.points ?? 0.33;
+    const wWin = w.win_rate ?? 0.34, wCoop = w.cooperation ?? 0.33, wPts = w.points ?? 0.33;
     let maxPayoff = 5;
     if (tournament.payoff_matrix) {
         let maxVal = 0;
