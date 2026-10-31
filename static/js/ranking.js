@@ -145,6 +145,13 @@ function rankCompare(a, b, direction) {
     return better ? -1 : 1;
 }
 
+const RANK_ELIMINATION_NOTE = 'Elimination: ranked by the round reached, then by place in that round '
+    + '(group place first, then score across groups).';
+
+function rankIsElimination(entries) {
+    return (entries || []).some(e => e && typeof e.stage_reached === 'number' && isFinite(e.stage_reached));
+}
+
 // Sort `entries` by `spec`, setting `rank` and `rank_label` ('=2' when shared) on each.
 // Returns a new array; the original order is the last tie-break.
 function rankEntries(entries, spec, mode, get) {
@@ -160,9 +167,14 @@ function rankEntries(entries, spec, mode, get) {
             }
         });
     }
-    const chain = [[spec.metric, spec.direction]];
+    // Elimination results: the bracket decides the order (round reached, then place in that
+    // round), so re-ranking can never contradict who actually went through. Same as ranking.py.
+    const lead = rankIsElimination(entries) ? [['stage_reached', 'desc'], ['stage_order', 'asc']] : [];
+    const chain = lead.concat([[spec.metric, spec.direction]]);
     if (!spec.shared_rank) spec.tiebreak.forEach(t => chain.push([t, cat[t][1]]));
-    const keyed = (entries || []).map((e, i) => ({ i, e, v: chain.map(([m]) => rankValue(e, m, get)) }));
+    const nLead = lead.length + 1;
+    const keyed = (entries || []).map((e, i) => ({ i, e, v: chain.map(([m], k) => k < lead.length
+        ? ((typeof e[m] === 'number' && isFinite(e[m])) ? e[m] : null) : rankValue(e, m, get)) }));
     keyed.sort((x, y) => {
         for (let k = 0; k < chain.length; k++) {
             const c = rankCompare(x.v[k], y.v[k], chain[k][1]);
@@ -172,8 +184,10 @@ function rankEntries(entries, spec, mode, get) {
     });
     const out = [];
     keyed.forEach((k, pos) => {
-        const same = spec.shared_rank && pos > 0
-            && rankCompare(k.v[0], keyed[pos - 1].v[0], spec.direction) === 0;
+        let same = spec.shared_rank && pos > 0;
+        for (let j = 0; same && j < nLead; j++) {
+            same = rankCompare(k.v[j], keyed[pos - 1].v[j], chain[j][1]) === 0;
+        }
         k.e.rank = same ? out[out.length - 1].rank : pos + 1;
         out.push(k.e);
     });

@@ -93,7 +93,7 @@ from audit_utils import log_audit_event, get_request_context
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from payoff_models import PairwiseMatrixPayoff, PublicGoodsPayoff, KCooperatorTensorPayoff
-from n_player_simulation import group_tournament, call_strategy, validate_move, describe_strategy_error, referenced_names
+from n_player_simulation import group_tournament, elimination_tournament, call_strategy, validate_move, describe_strategy_error, referenced_names
 from tournament_package import sha256_text, canonical_json
 from ranking import normalize_ranking, rank_entries, describe_ranking, DEFAULT_RANKING
 import code_vault
@@ -204,6 +204,20 @@ def _heterogeneous_combination_error(num_cores, n_strategies):
 # Valid CPU scheduler policies for the OS simulation (see schedulers.py).
 VALID_SCHEDULERS = ('fcfs', 'round_robin', 'sjf', 'priority', 'mlfq', 'cfs', 'affinity')
 VALID_ASSIGNMENT_MODES = ('homogeneous', 'heterogeneous')
+
+# Tournament style for N-Player and the heterogeneous OS simulation. 'legacy' is the original
+# single pass (N-Player: every group plays once, one leaderboard; OS: every mixture). 'elimination'
+# is the group elimination of elimination.py. The API default stays 'legacy' so existing scripts
+# and website schedules behave exactly as before; the local forms default to 'elimination'.
+VALID_STYLES = ('legacy', 'elimination')
+
+
+def parse_style(data):
+    """Return (style, error)."""
+    style = (data or {}).get('style') or 'legacy'
+    if style not in VALID_STYLES:
+        return None, f"style must be one of {list(VALID_STYLES)}"
+    return style, None
 
 # --------------------------
 
@@ -2462,6 +2476,9 @@ def nplayer_tournament():
     weights = data.get('weights', None)
     mode = data.get('mode', 'standard')
     modes = data.get('modes', None)
+    style, style_error = parse_style(data)
+    if style_error:
+        return jsonify({'error': style_error}), 400
 
     # Optional mode parameters for N-player
     try:
@@ -2567,6 +2584,7 @@ def nplayer_tournament():
                 'weights': weights,
                 'payoff_model': payoff_model_config.get('type') if payoff_model_config else 'pairwise_matrix',
                 'format': 'n-player',
+                'style': style,
                 'n_players': len(strategies),
                 'group_size': group_size,
                 'mode': mode,
@@ -2613,7 +2631,8 @@ def nplayer_tournament():
     
     # Run tournament
     try:
-        result = group_tournament(
+        run_tournament = elimination_tournament if style == 'elimination' else group_tournament
+        result = run_tournament(
             strategies=compiled_strategies,
             rounds=rounds,
             group_size=group_size,
@@ -2782,22 +2801,28 @@ def parse_payoff_model(config):
 
 def _run_core_simulation(strategies, *, num_cores, scheduler, core_assignment_mode,
                          core_sim_seed, unlimited=False, runs=1, num_processes=50, warmup=0.0,
-                         ranking=None):
+                         ranking=None, style='legacy'):
     """Run the OS simulation on exactly the supplied strategies, returning result/config blocks.
 
     No screening / top-K selection: the user's submitted strategies *are* the pool.
-    Homogeneous benchmarks each strategy on all N cores; heterogeneous enumerates every
-    `combinations(strategies, num_cores)` mixture (each strategy at most once) and ranks by
-    throughput.
+    Homogeneous benchmarks each strategy on all N cores. Heterogeneous, legacy style, runs every
+    `combinations(strategies, num_cores)` mixture (each strategy at most once); elimination style
+    runs groups of num_cores strategies and scores each strategy on its own core. Both rank by
+    the chosen ranking (default: lowest average response time).
     """
-    from core_simulation import run_full_simulation, run_heterogeneous_simulation
+    from core_simulation import (run_full_simulation, run_heterogeneous_simulation,
+                                 run_heterogeneous_elimination)
 
     core_simulation_results = None
     core_simulation_heterogeneous = None
     pool = [{'name': s['name'], 'code': s['code'], 'submitted_at': s.get('submitted_at')}
             for s in strategies]
     try:
-        if core_assignment_mode == 'heterogeneous':
+        if core_assignment_mode == 'heterogeneous' and style == 'elimination':
+            core_simulation_heterogeneous = run_heterogeneous_elimination(
+                pool, num_cores=num_cores, seed=core_sim_seed, scheduler=scheduler,
+                runs=runs, num_processes=num_processes, warmup=warmup, ranking=ranking)
+        elif core_assignment_mode == 'heterogeneous':
             core_simulation_heterogeneous = run_heterogeneous_simulation(
                 pool, num_cores=num_cores, seed=core_sim_seed, scheduler=scheduler,
                 max_combinations=MAX_COMBINATIONS,
@@ -2822,12 +2847,14 @@ def _run_core_simulation(strategies, *, num_cores, scheduler, core_assignment_mo
     trace_seed = ((core_simulation_results or {}).get('seed')
                   or (core_simulation_heterogeneous or {}).get('seed') or core_sim_seed)
     try:
-        from core_simulation import build_core_trace, extract_strategy_func
+        from core_simulation import build_core_trace, extract_strategy_func, filler_strategy
         code_by_name = {s['name']: s['code'] for s in pool}
+        FILLER = '(plain scheduler)'
 
         def _layout_traces(layout, label):
             """One trace per workload profile for a given core layout."""
-            named_funcs = [(n, extract_strategy_func(code_by_name.get(n, ''), seed=trace_seed))
+            named_funcs = [(n, filler_strategy if n == FILLER else
+                            extract_strategy_func(code_by_name.get(n, ''), seed=trace_seed))
                            for n in layout]
             if not named_funcs or not all(f for _, f in named_funcs):
                 return []
@@ -2841,7 +2868,17 @@ def _run_core_simulation(strategies, *, num_cores, scheduler, core_assignment_mo
                     out.append(tr)
             return out
 
-        if core_assignment_mode == 'heterogeneous' and core_simulation_heterogeneous \
+        het = core_simulation_heterogeneous or {}
+        if het.get('style') == 'elimination' and het.get('rounds'):
+            # Trace the final group, seated as it ran (short groups had filler cores).
+            final_group = het['rounds'][-1]['groups'][0]['players']
+            seats = sorted((r.get('core_index', 0), r['name']) for r in het['leaderboard']
+                           if r.get('stage_reached') == het['bracket_rounds']
+                           and any(p['name'] == r['name'] for p in final_group))
+            if 0 < len(seats) <= num_cores:
+                layout = [n for _, n in seats] + [FILLER] * (num_cores - len(seats))
+                traces.extend(_layout_traces(layout, 'Final: ' + ' + '.join(n for _, n in seats)))
+        elif core_assignment_mode == 'heterogeneous' and core_simulation_heterogeneous \
                 and core_simulation_heterogeneous.get('results'):
             for combo in core_simulation_heterogeneous['results'][:TRACE_LAYOUT_CAP]:
                 layout = [d['strategy_name'] for d in combo['assignment_details']]
@@ -2862,6 +2899,7 @@ def _run_core_simulation(strategies, *, num_cores, scheduler, core_assignment_mo
         'num_cores': num_cores,
         'scheduler': scheduler,
         'core_assignment_mode': core_assignment_mode,
+        'style': style if core_assignment_mode == 'heterogeneous' else 'legacy',
         # Only the strategies still in the ranking; disqualified ones are listed separately.
         'selected_strategies': [s['name'] for s in pool if s['name'] not in _dq_names],
         'disqualified': _dq,
@@ -2882,7 +2920,8 @@ def _run_core_simulation(strategies, *, num_cores, scheduler, core_assignment_mo
 
 def run_standalone_core_simulation(strategies, *, num_cores, scheduler,
                                    core_assignment_mode, seed, unlimited=False,
-                                   runs=1, num_processes=50, warmup=0.0, ranking=None):
+                                   runs=1, num_processes=50, warmup=0.0, ranking=None,
+                                   style='legacy'):
     """Run the OS core simulation on its own (no tournament needed).
 
     Runs on exactly the supplied strategies — no screening, no top-K. Returns the three
@@ -2891,7 +2930,7 @@ def run_standalone_core_simulation(strategies, *, num_cores, scheduler,
     return _run_core_simulation(
         strategies, num_cores=num_cores, scheduler=scheduler,
         core_assignment_mode=core_assignment_mode, core_sim_seed=seed, unlimited=unlimited,
-        runs=runs, num_processes=num_processes, warmup=warmup, ranking=ranking)
+        runs=runs, num_processes=num_processes, warmup=warmup, ranking=ranking, style=style)
 
 
 @app.route('/os-simulation', methods=['POST'])
@@ -2950,7 +2989,12 @@ def os_simulation():
     core_assignment_mode = data.get('core_assignment_mode', 'homogeneous')
     if core_assignment_mode not in VALID_ASSIGNMENT_MODES:
         return jsonify({'error': f"core_assignment_mode must be one of {list(VALID_ASSIGNMENT_MODES)}"}), 400
-    if core_assignment_mode == 'heterogeneous':
+    style, style_error = parse_style(data)
+    if style_error:
+        return jsonify({'error': style_error}), 400
+    # Elimination pads short groups with filler cores, so it needs no minimum strategy count.
+    needs_full_mixture = core_assignment_mode == 'heterogeneous' and style == 'legacy'
+    if needs_full_mixture:
         het_error = _heterogeneous_combination_error(num_cores, len(clean))
         if het_error:
             return jsonify({'error': het_error}), 400
@@ -2993,7 +3037,7 @@ def os_simulation():
         clean, screen_flags = isolation.screen_strategies(clean)
         if len(clean) < 2:
             return _screening_shortfall(screen_flags)
-        if core_assignment_mode == 'heterogeneous':
+        if needs_full_mixture:
             het_error = _heterogeneous_combination_error(num_cores, len(clean))
             if het_error:
                 return jsonify({'error': het_error, 'flags': screen_flags, 'screened': True}), 400
@@ -3002,7 +3046,8 @@ def os_simulation():
         result = run_standalone_core_simulation(
             clean, num_cores=num_cores, scheduler=scheduler,
             core_assignment_mode=core_assignment_mode, seed=seed, unlimited=unlimited,
-            runs=runs, num_processes=num_processes, warmup=warmup, ranking=data.get('ranking'))
+            runs=runs, num_processes=num_processes, warmup=warmup, ranking=data.get('ranking'),
+            style=style)
         if isolated:
             result['flags'] = screen_flags
             result['screened'] = True

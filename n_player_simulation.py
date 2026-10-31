@@ -689,6 +689,7 @@ def group_tournament(
         else:
             cooperation_percentage = 0.0
             points_percentage = 0.0
+            avg_points_per_round = 0.0
         
         # Normalized cooperation %: equal-weight each mode's cooperation ratio so a longer
         # (random/stochastic) mode doesn't dominate. Parity with 1v1's norm_cooperation_percentage.
@@ -729,6 +730,8 @@ def group_tournament(
         leaderboard.append({
             'name': data['name'],
             'total_points': data['total_points'],
+            # Average points per round (comparable between groups that played different lengths).
+            'points_per_round': avg_points_per_round,
             'cooperation_percentage': cooperation_percentage,
             'norm_cooperation_percentage': norm_cooperation_percentage,
             'points_percentage': points_percentage,
@@ -777,5 +780,152 @@ def group_tournament(
             'fixed_random_rounds': tournament_fixed_random_rounds,
         }
     }
-    
+
     return result
+
+
+# --- Group elimination (final sprint) -------------------------------------------------------
+
+def _per_round_get(entry, metric):
+    """Compare players from different groups fairly: total points depend on how many rounds a
+    group happened to play (stochastic / random modes), so use points per round instead."""
+    if metric == 'total_points':
+        return entry.get('points_per_round')
+    if metric == 'earliest_submission':
+        return entry.get('submitted_at')
+    return entry.get(metric)
+
+
+def elimination_tournament(
+    strategies,
+    rounds,
+    group_size=None,
+    seed=None,
+    payoff_model=None,
+    weights=None,
+    mode="standard",
+    modes: list[str] | None = None,
+    discount_factor: float = 0.95,
+    stochastic_prob: float = 0.995,
+    fixed_random_rounds: int | None = None,
+    ranking=None,
+):
+    """N-Player as a group elimination tournament (the rule is in elimination.py).
+
+    Every group is played exactly like a one-group ``group_tournament`` (same scoring, same
+    ranking, same disqualification). Then the top of each group plus the best wildcards move
+    on, until one final group is left.
+
+    Returns the same shape as ``group_tournament`` (``leaderboard``, ``matches``,
+    ``tournament_info``, ...) plus ``rounds``: the bracket, round by round. Leaderboard rows
+    carry ``stage_reached`` (last round played) and ``stage_order`` (place among the players
+    who went out in that round); those two decide the final order.
+    """
+    import elimination
+    from ranking import ELIMINATION_NOTE
+
+    n = len(strategies)
+    spec = normalize_ranking(_with_weights(ranking, weights), 'nplayer')
+    rng = random.Random(seed) if seed is not None else random.Random()
+    G = group_size if (group_size and group_size >= 2) else max(n, 2)
+
+    # Random mode: one match length for the whole tournament, chosen like group_tournament.
+    active_modes = list(modes) if modes else [mode or 'standard']
+    fixed_rounds = fixed_random_rounds
+    if 'random' in active_modes and fixed_random_rounds is None:
+        fixed_rounds = (random.Random(seed) if seed is not None else random.Random()).randint(100, 300)
+
+    def order_across(pids):
+        """Players from different groups, best first, scored per round."""
+        rows = rank_entries([last_row[p] for p in pids], spec, 'nplayer', get=_per_round_get)
+        return [r['_pid'] for r in rows]
+
+    players = list(range(n))
+    rng.shuffle(players)        # round 1: seeded random order; later rounds: best first
+    last_row = {}               # player -> their row from the last group they played
+    round_rows = {}             # (round, player) -> their row in that round (for the bracket)
+    record = {i: {'wins': 0, 'draws': 0, 'losses': 0, 'groups_played': 0} for i in range(n)}
+    disqualified = {}           # player -> reason
+    all_matches = []
+
+    def play_round(round_no, groups):
+        ranked_groups = []      # per group: (members, players still in best first)
+        for gi, members in enumerate(groups):
+            res = group_tournament(
+                [strategies[i] for i in members], rounds, group_size=None,
+                seed=None if seed is None else seed + round_no * 10_000_000 + gi * 1000,
+                payoff_model=payoff_model, weights=weights, mode=mode, modes=modes,
+                discount_factor=discount_factor, stochastic_prob=stochastic_prob,
+                fixed_random_rounds=fixed_rounds, ranking=spec,
+            )
+            # Rows only carry names: map them back to players (a repeated name maps in order).
+            free = {}
+            for i in members:
+                free.setdefault(strategies[i]['name'], []).append(i)
+            for err in res.get('runtime_errors') or []:
+                if free.get(err['name']):
+                    disqualified.setdefault(free[err['name']].pop(0), err['reason'])
+            order = []
+            for row in res['leaderboard']:
+                if not free.get(row['name']):
+                    continue
+                pid = free[row['name']].pop(0)
+                row['_pid'] = pid
+                order.append(pid)
+                last_row[pid] = row
+                round_rows[(round_no, pid)] = row
+                rec = record[pid]
+                for k in ('wins', 'draws', 'losses'):
+                    rec[k] += row.get(k, 0)
+                rec['groups_played'] += 1
+            ranked_groups.append((members, order))
+            for m in res.get('matches') or []:
+                all_matches.append({**m, 'round': round_no, 'group_index': gi})
+        return ranked_groups
+
+    rounds_played, stage_of = elimination.run_bracket(players, G, play_round, order_across)
+    bracket = elimination.bracket_json(
+        rounds_played, lambda p: strategies[p]['name'], disqualified,
+        lambda r, p: {k: round_rows[(r, p)].get(k) for k in
+                      ('points_per_round', 'total_points', 'cooperation_percentage')})
+
+    leaderboard = []
+    for pid, (stage, pos) in stage_of.items():
+        row = {k: v for k, v in last_row[pid].items() if k != '_pid'}
+        rec = record[pid]
+        # Win rate over the whole bracket: groups topped / groups played.
+        row.update(wins=rec['wins'], draws=rec['draws'], losses=rec['losses'],
+                   groups_played=rec['groups_played'], stage_reached=stage, stage_order=pos,
+                   submitted_at=strategies[pid].get('submitted_at'))
+        leaderboard.append(row)
+    leaderboard = rank_entries(leaderboard, spec, 'nplayer')
+
+    runtime_errors = [
+        {'name': strategies[i]['name'], 'reason': reason, 'error': reason, 'stage': 'during the run'}
+        for i, reason in sorted(disqualified.items())
+    ]
+    return {
+        'leaderboard': leaderboard,
+        'matches': all_matches,
+        'rounds': bracket,
+        'runtime_errors': runtime_errors,
+        'disqualified': runtime_errors,
+        'ranking': spec,
+        'ranking_text': ELIMINATION_NOTE + ' ' + describe_ranking(spec, 'nplayer'),
+        'tournament_info': {
+            'format': 'n_player',
+            'style': 'elimination',
+            'mode': active_modes[0] if len(active_modes) == 1 else 'multi',
+            'modes': active_modes,
+            'n_strategies': n,
+            'n_groups': len(bracket[0]['groups']) if bracket else 0,
+            'group_size': group_size,
+            'bracket_rounds': len(bracket),
+            'rounds': rounds,
+            'weights': weights,
+            'seed': seed,
+            'discount_factor': discount_factor,
+            'stochastic_prob': stochastic_prob,
+            'fixed_random_rounds': fixed_rounds,
+        },
+    }

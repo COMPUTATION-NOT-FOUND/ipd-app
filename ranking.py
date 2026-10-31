@@ -187,6 +187,23 @@ def _default_get(entry, metric):
     return entry.get(metric)
 
 
+def _is_num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _stage_value(entry, key):
+    v = entry.get(key) if isinstance(entry, dict) else None
+    return v if _is_num(v) else None
+
+
+ELIMINATION_NOTE = ("Elimination: ranked by the round reached, then by place in that round "
+                    "(group place first, then score across groups).")
+
+
+def is_elimination(entries):
+    return any(isinstance(e, dict) and _is_num(e.get('stage_reached')) for e in entries or [])
+
+
 def rank_entries(entries, spec, mode, get=None):
     """Sort ``entries`` (dicts) by ``spec`` and set ``rank`` (int) and ``rank_label`` ('=2') on
     each. Returns a new list; the input order is the last tie-break."""
@@ -199,11 +216,18 @@ def rank_entries(entries, spec, mode, get=None):
             if isinstance(e, dict) and ('wins' in e or 'points_percentage' in e):
                 e['weighted_score'] = weighted_score(e, spec['weights'])
                 e['win_rate'] = win_rate(e)
-    chain = [(spec['metric'], spec['direction'])]
+    # Elimination results: the bracket decides the order (round reached, then place in that
+    # round), so re-ranking a stored result can never contradict who actually went through.
+    lead = []
+    if is_elimination(entries):
+        lead = [('stage_reached', 'desc'), ('stage_order', 'asc')]
+    chain = lead + [(spec['metric'], spec['direction'])]
     if not spec['shared_rank']:
         chain += [(t, catalog[t][1]) for t in spec['tiebreak']]
+    n_lead = len(lead) + 1   # values that must match for a shared place
 
-    keyed = [(i, e, [_value(e, m, get) for m, _ in chain]) for i, e in enumerate(entries)]
+    keyed = [(i, e, [_stage_value(e, m) if (m, d) in lead else _value(e, m, get) for m, d in chain])
+             for i, e in enumerate(entries)]
 
     def cmp(x, y):
         for (m, d), va, vb in zip(chain, x[2], y[2]):
@@ -216,7 +240,8 @@ def rank_entries(entries, spec, mode, get=None):
 
     out = []
     for pos, (_, e, vals) in enumerate(keyed):
-        if spec['shared_rank'] and pos and _compare(vals[0], keyed[pos - 1][2][0], spec['direction']) == 0:
+        if spec['shared_rank'] and pos and all(
+                _compare(vals[k], keyed[pos - 1][2][k], chain[k][1]) == 0 for k in range(n_lead)):
             rank = out[-1]['rank']
         else:
             rank = pos + 1
@@ -254,6 +279,8 @@ def apply_ranking_to_result(result, kind, spec):
     if mode in ('1v1', 'nplayer'):
         board = [e for e in (result.get('leaderboard') or []) if isinstance(e, dict)]
         result['leaderboard'] = rank_entries(board, spec, mode)
+        if is_elimination(board):
+            result['ranking_text'] = ELIMINATION_NOTE + ' ' + result['ranking_text']
         result['winner'] = result['leaderboard'][0].get('name') if result['leaderboard'] else 'No participants'
         return result
     winner = None
@@ -275,6 +302,14 @@ def apply_ranking_to_result(result, kind, spec):
         het['ranking'] = spec
         if het['results'] and winner is None:
             winner = ' + '.join((het['results'][0].get('combination') or {}).keys())
+    if isinstance(het, dict) and isinstance(het.get('leaderboard'), list):
+        # Elimination: one row per strategy (its own core's numbers), ordered by the bracket.
+        het['leaderboard'] = rank_entries([r for r in het['leaderboard'] if isinstance(r, dict)],
+                                          spec, 'os')
+        het['ranking'] = spec
+        het['ranking_text'] = ELIMINATION_NOTE + ' ' + describe_ranking(spec, 'os')
+        if het['leaderboard'] and winner is None:
+            winner = het['leaderboard'][0].get('name')
     if winner:
         result['winner'] = winner
     return result
@@ -299,13 +334,18 @@ def preview_rows(result, kind):
             if isinstance(e, dict):
                 rows.append({'name': str(e.get('name', '')), 'submitted_at': e.get('submitted_at')
                              if isinstance(e.get('submitted_at'), str) else None,
-                             **nums(e, keep + ['draws'])})
+                             **nums(e, keep + ['draws', 'stage_reached'])})
         return rows
     homo = result.get('core_simulation_results') or {}
     for n, v in (homo.get('strategies') or {}).items():
         v = v or {}
         rows.append({'name': str(n), 'submitted_at': v.get('submitted_at')
                      if isinstance(v.get('submitted_at'), str) else None, **nums(v.get('avg') or {}, keep)})
+    for r in (result.get('core_simulation_heterogeneous') or {}).get('leaderboard') or []:
+        if isinstance(r, dict):
+            rows.append({'name': str(r.get('name', '')), 'submitted_at': r.get('submitted_at')
+                         if isinstance(r.get('submitted_at'), str) else None,
+                         **nums(r, keep + ['stage_reached'])})
     for r in (result.get('core_simulation_heterogeneous') or {}).get('results') or []:
         if isinstance(r, dict):
             row = {'name': ' + '.join((r.get('combination') or {}).keys())}

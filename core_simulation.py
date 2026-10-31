@@ -318,6 +318,12 @@ class Process:
         self.last_core = None    # affinity / cache warmth
 
 
+def filler_strategy(*_args):
+    """A filler core in an elimination group that is short of strategies: it always plays 'D',
+    i.e. the plain scheduler (the same as the baseline run). It is never ranked."""
+    return 'D'
+
+
 class Core:
     def __init__(self, id, strategy_func):
         self.id = id
@@ -338,7 +344,8 @@ class OSSimulator:
     """
 
     def __init__(self, workload_type, core_strategies, scheduler='round_robin',
-                 seed=None, num_cores=2, record_trace=False, fixed_move=None, warmup_fraction=0.0):
+                 seed=None, num_cores=2, record_trace=False, fixed_move=None, warmup_fraction=0.0,
+                 per_core=False):
         if len(core_strategies) != num_cores:
             raise ValueError(f"core_strategies must have {num_cores} strategies, got {len(core_strategies)}")
 
@@ -371,6 +378,13 @@ class OSSimulator:
         # Per-core PD move history and the contention ("opponent") history it saw.
         self.core_moves = [[] for _ in range(num_cores)]
         self.core_contention = [[] for _ in range(num_cores)]
+
+        # Elimination mode: give each core its own numbers (tasks it started, tasks it finished)
+        # and rotate which core picks work first each tick, so no seat is favoured. Off by
+        # default, so the legacy runs stay exactly as they were.
+        self.per_core = per_core
+        self.core_completed = [0] * num_cores
+        self.core_busy = [0] * num_cores
 
         self.completed_processes = []
         self.all_processes = []
@@ -449,10 +463,10 @@ class OSSimulator:
         # as a single "opponent": its current move + per-core contention history.
         my_history = self.core_moves[core_idx]
         contention_history = self.core_contention[core_idx]
-        if self.fixed_move is not None:
-            # Baseline run: ignore the PD strategy and play a constant move so the scheduler
-            # behaves in its textbook form (no strategy-driven yielding).
-            move = self.fixed_move
+        if self.fixed_move is not None or core.strategy_func is filler_strategy:
+            # Baseline run (or a filler core): ignore the PD strategy and play a constant move so
+            # the scheduler behaves in its textbook form (no strategy-driven yielding).
+            move = self.fixed_move or 'D'
         else:
             meta = {
                 'round': len(my_history),
@@ -518,7 +532,13 @@ class OSSimulator:
             self.scheduler.balance(self, self.time)
 
             # 3. Per-core dispatch + execute
-            for i, core in enumerate(self.cores):
+            if self.per_core:
+                start = self.time % self.num_cores
+                order = [(i, self.cores[i]) for i in
+                         list(range(start, self.num_cores)) + list(range(start))]
+            else:
+                order = enumerate(self.cores)
+            for i, core in order:
                 if core.process is None or core.slice_remaining <= 0:
                     # Slice expired with work unfinished -> preempt and requeue.
                     if core.process is not None:
@@ -535,6 +555,7 @@ class OSSimulator:
                         if proc.start_time is None:
                             proc.start_time = self.time
                             proc.response_time = self.time - proc.arrival_time
+                            proc.started_by = i
                         proc.context_switches += 1
                         q = self.scheduler.quantum(core, proc, move)
                         core.slice_remaining = math.inf if q is None else q
@@ -553,8 +574,10 @@ class OSSimulator:
                     p.remaining_time -= work_done
                     core.slice_remaining -= 1
                     self.busy_ticks += 1
+                    self.core_busy[i] += 1
 
                     if p.remaining_time <= 0:
+                        self.core_completed[i] += 1
                         p.completion_time = self.time
                         p.turnaround_time = p.completion_time - p.arrival_time
                         p.waiting_time = max(0, p.turnaround_time - p.burst_time)
@@ -610,7 +633,35 @@ class OSSimulator:
             },
             'simulation_config': self._config(),
             'trace': self.trace if self.record_trace else None,
+            **({'per_core': self._per_core_metrics(measured)} if self.per_core else {}),
         }
+
+    def _per_core_metrics(self, measured):
+        """Each core's own numbers. A task belongs to the core that first started it: that
+        core's choice decided how long it waited. Throughput counts the tasks a core finished.
+        A core that started no measured task has no response/wait/turnaround (None)."""
+        out = []
+        for i in range(self.num_cores):
+            own = [p for p in measured if getattr(p, 'started_by', None) == i]
+            moves = self.core_moves[i]
+
+            def avg(vals):
+                return round(sum(vals) / len(vals), 2) if vals else None
+            row = {
+                'tasks_started': len(own),
+                'throughput': round(self.core_completed[i] / self.time * 1000, 2) if self.time else 0.0,
+                'busy_share': round(self.core_busy[i] / self.time, 4) if self.time else 0.0,
+                'coop_rate': round(100 * sum(1 for m in moves if m == 'C') / len(moves), 1) if moves else 0.0,
+            }
+            for key, vals in (('avg_response', [p.response_time for p in own if p.response_time is not None]),
+                              ('avg_waiting', [p.waiting_time for p in own]),
+                              ('avg_turnaround', [p.turnaround_time for p in own]),
+                              ('avg_cache_misses', [p.cache_misses for p in own])):
+                v = avg(vals)
+                if v is not None:
+                    row[key] = v
+            out.append(row)
+        return out
 
     def _config(self):
         return {
@@ -663,11 +714,11 @@ def make_seeds(seed, runs):
     return [base + i for i in range(runs)]
 
 
-def _mean_ci(rows):
+def _mean_ci(rows, keys=_RUN_METRIC_KEYS):
     """Average each metric over runs. With 2+ runs, also the 95% confidence-interval half-width
     under 'ci' (the true average is likely within mean +/- ci)."""
     out, ci = {}, {}
-    for k in _RUN_METRIC_KEYS:
+    for k in keys:
         vals = [r[k] for r in rows if k in r]
         if not vals:
             continue
@@ -679,31 +730,57 @@ def _mean_ci(rows):
     return out
 
 
-def _run_replicated(core_funcs, *, num_cores, scheduler, seeds, num_processes, warmup,
-                    fixed_move=None):
-    """Run all four workloads once per seed. Returns ({workload: mean+ci}, overall mean+ci).
-    The overall row averages the four workloads within each run first, so its interval reflects
-    run-to-run variation. Raises StrategyRuntimeError if a strategy fails in any run."""
-    per_run = {wl: [] for wl in WORKLOAD_PROFILES}
-    for s in seeds:
-        for wl in WORKLOAD_PROFILES:
-            sim = OSSimulator(wl, core_funcs, scheduler=scheduler, seed=s, num_cores=num_cores,
-                              fixed_move=fixed_move, warmup_fraction=warmup)
-            sim.generate_workload(num_processes)
-            metrics = sim.run()['global_metrics']
-            if fixed_move is None:
-                metrics['coop_rate'] = round(sim.realized_coop_rate() * 100, 1)
-            per_run[wl].append(metrics)
-    per_wl = {wl: _mean_ci(rows) for wl, rows in per_run.items()}
+# Per-core numbers averaged in elimination mode (see OSSimulator._per_core_metrics).
+_CORE_METRIC_KEYS = ('throughput', 'avg_waiting', 'avg_turnaround', 'avg_response',
+                     'avg_cache_misses', 'coop_rate', 'tasks_started', 'busy_share')
+
+
+def _average_over_workloads(per_run, n_runs, keys):
+    """One row per run: the plain mean of the four workloads in that run."""
     overall = []
-    for i in range(len(seeds)):
+    for i in range(n_runs):
         row = {}
-        for k in _RUN_METRIC_KEYS:
+        for k in keys:
             vals = [per_run[wl][i][k] for wl in WORKLOAD_PROFILES if k in per_run[wl][i]]
             if vals:
                 row[k] = sum(vals) / len(vals)
         overall.append(row)
-    return per_wl, _mean_ci(overall)
+    return overall
+
+
+def _run_replicated(core_funcs, *, num_cores, scheduler, seeds, num_processes, warmup,
+                    fixed_move=None, per_core=False):
+    """Run all four workloads once per seed. Returns ({workload: mean+ci}, overall mean+ci).
+    The overall row averages the four workloads within each run first, so its interval reflects
+    run-to-run variation. Raises StrategyRuntimeError if a strategy fails in any run.
+
+    With ``per_core=True`` (elimination mode) a third value is returned: one entry per core,
+    ``{'workloads': {workload: mean+ci}, 'avg': mean+ci}``, averaged the same way."""
+    per_run = {wl: [] for wl in WORKLOAD_PROFILES}
+    core_runs = [{wl: [] for wl in WORKLOAD_PROFILES} for _ in range(num_cores)]
+    for s in seeds:
+        for wl in WORKLOAD_PROFILES:
+            sim = OSSimulator(wl, core_funcs, scheduler=scheduler, seed=s, num_cores=num_cores,
+                              fixed_move=fixed_move, warmup_fraction=warmup, per_core=per_core)
+            sim.generate_workload(num_processes)
+            out = sim.run()
+            metrics = out['global_metrics']
+            if fixed_move is None:
+                metrics['coop_rate'] = round(sim.realized_coop_rate() * 100, 1)
+            per_run[wl].append(metrics)
+            if per_core:
+                rows = out.get('per_core') or [{} for _ in range(num_cores)]
+                for c in range(num_cores):
+                    core_runs[c][wl].append(rows[c])
+    per_wl = {wl: _mean_ci(rows) for wl, rows in per_run.items()}
+    overall = _mean_ci(_average_over_workloads(per_run, len(seeds), _RUN_METRIC_KEYS))
+    if not per_core:
+        return per_wl, overall
+    cores = [{'workloads': {wl: _mean_ci(rows, _CORE_METRIC_KEYS) for wl, rows in cr.items()},
+              'avg': _mean_ci(_average_over_workloads(cr, len(seeds), _CORE_METRIC_KEYS),
+                              _CORE_METRIC_KEYS)}
+             for cr in core_runs]
+    return per_wl, overall, cores
 
 
 def _overload_info(baseline):
@@ -979,4 +1056,134 @@ def run_heterogeneous_simulation(strategies_data, num_cores=2, seed=None,
         **_overload_info(baseline_result),
         **_run_info(seeds, num_processes, warmup),
         'errors': [{'name': n, 'reason': r} for n, r in errors.items()],
+    }
+
+
+# --- Heterogeneous elimination (final sprint) ----------------------------------------------
+
+def _elimination_group_job(codes, *, seeds, num_cores, scheduler, num_processes, warmup):
+    """One elimination group: one strategy per core (``None`` = filler core), every seed and
+    workload, with each core's own numbers. Top level so a worker process can run it.
+
+    A strategy that fails is disqualified and the group is replayed with a filler core in its
+    seat (fresh copies of the others), so the rest are not scored against a broken run.
+    Returns {'cores': [per-core {workloads, avg}], 'group': {workloads, avg},
+    'errors': {seat: reason}}.
+    """
+    errors = {}
+    while True:
+        funcs = []
+        for seat, code in enumerate(codes):
+            func = None
+            if code is not None and seat not in errors:
+                func = extract_strategy_func(code, seed=seeds[0])
+                if not func:
+                    errors[seat] = 'could not find a strategy function in the code'
+            funcs.append(func or filler_strategy)
+        try:
+            per_wl, overall, cores = _run_replicated(
+                funcs, num_cores=num_cores, scheduler=scheduler, seeds=seeds,
+                num_processes=num_processes, warmup=warmup, per_core=True)
+        except StrategyRuntimeError as e:
+            errors[e.core_idx] = e.reason
+            continue
+        return {'cores': cores, 'group': {'workloads': per_wl, 'avg': overall}, 'errors': errors}
+
+
+def run_heterogeneous_elimination(strategies_data, num_cores=2, seed=None,
+                                  scheduler='round_robin', runs=1,
+                                  num_processes=FULL_PROCESS_COUNT, warmup=0.0, ranking=None):
+    """HETEROGENEOUS, elimination style: groups of ``num_cores`` different strategies share
+    one machine (one strategy per core) and each strategy is scored on its own core.
+
+    Groups follow the rule in elimination.py with G = num_cores. A group short of strategies
+    gets filler cores (the plain scheduler), which are never ranked. Every group runs on the
+    same seeds, so every strategy faces the same task lists. Inside a group cores are ranked
+    by ``ranking`` (default: lowest average response time of the tasks that core started).
+
+    Returns {'assignment_mode': 'heterogeneous', 'style': 'elimination', 'leaderboard',
+    'rounds', 'baseline', 'errors', ...}. Leaderboard rows use the long metric names
+    (avg_response, avg_waiting, ...) plus ``stage_reached`` / ``stage_order``.
+    """
+    import elimination
+    import parallel
+
+    seeds = make_seeds(seed, runs)
+    spec = normalize_ranking(ranking, 'os')
+    n = len(strategies_data)
+    if n < 1:
+        raise ValueError("Heterogeneous elimination needs at least one strategy.")
+    players = list(range(n))
+    random.Random(seeds[0]).shuffle(players)
+    last_row = {}       # strategy -> its core's row from the last group it played
+    round_rows = {}     # (round, strategy) -> its row in that round (for the bracket)
+    errors = {}         # strategy -> reason (disqualified)
+    group_runs = []     # whole-group numbers, for reference
+    started = time.perf_counter()
+    job_kw = {'seeds': seeds, 'num_cores': num_cores, 'scheduler': scheduler,
+              'num_processes': num_processes, 'warmup': warmup}
+
+    def order_by_spec(pids):
+        rows = rank_entries([last_row[p] for p in pids], spec, 'os')
+        return [r['_pid'] for r in rows]
+
+    def play_round(round_no, groups):
+        calls = [(_elimination_group_job,
+                  ([strategies_data[i]['code'] for i in members] + [None] * (num_cores - len(members)),),
+                  job_kw) for members in groups]
+        played = []
+        for gi, (members, out) in enumerate(zip(groups, parallel.run_calls(calls))):
+            for seat, reason in out['errors'].items():
+                if seat < len(members):
+                    errors.setdefault(members[seat], reason)
+            for seat, pid in enumerate(members):
+                if pid in errors:
+                    continue
+                core = out['cores'][seat]
+                last_row[pid] = round_rows[(round_no, pid)] = {
+                    'name': strategies_data[pid]['name'], '_pid': pid,
+                    'submitted_at': strategies_data[pid].get('submitted_at'),
+                    'core_index': seat, 'round': round_no, **core['avg'],
+                    'workloads': core['workloads']}
+            group_runs.append({'round': round_no, 'group_index': gi,
+                               'players': [strategies_data[i]['name'] for i in members],
+                               'fillers': num_cores - len(members), **_het_summary(out['group']['avg'])})
+            played.append((members, order_by_spec([p for p in members if p not in errors])))
+        return played
+
+    rounds_played, stage_of = elimination.run_bracket(players, num_cores, play_round,
+                                                      order_by_spec, min_group=1)
+    keep = ('avg_response', 'avg_waiting', 'avg_turnaround', 'throughput', 'avg_cache_misses',
+            'coop_rate', 'tasks_started')
+    bracket = elimination.bracket_json(
+        rounds_played, lambda p: strategies_data[p]['name'], errors,
+        lambda r, p: {k: round_rows[(r, p)].get(k) for k in keep})
+
+    leaderboard = []
+    for pid, (stage, pos) in stage_of.items():
+        row = {k: v for k, v in last_row[pid].items() if k != '_pid'}
+        row.update(stage_reached=stage, stage_order=pos)
+        leaderboard.append(row)
+    leaderboard = rank_entries(leaderboard, spec, 'os')
+
+    baseline_result = run_baseline_simulation(num_cores=num_cores, scheduler=scheduler, seeds=seeds,
+                                              num_processes=num_processes, warmup=warmup)
+    from ranking import ELIMINATION_NOTE
+    return {
+        'assignment_mode': 'heterogeneous',
+        'style': 'elimination',
+        'scheduler': scheduler,
+        'num_cores': num_cores,
+        'strategy_count': n,
+        'bracket_rounds': len(bracket),
+        'ranking': spec,
+        'ranking_text': ELIMINATION_NOTE + ' ' + describe_ranking(spec, 'os'),
+        'elapsed_seconds': round(time.perf_counter() - started, 3),
+        'leaderboard': leaderboard,
+        'rounds': bracket,
+        'group_runs': group_runs,
+        'baseline': baseline_result,
+        **_overload_info(baseline_result),
+        **_run_info(seeds, num_processes, warmup),
+        'errors': [{'name': strategies_data[i]['name'], 'reason': r} for i, r in sorted(errors.items())],
     }
