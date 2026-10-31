@@ -2869,9 +2869,9 @@ def _run_core_simulation(strategies, *, num_cores, scheduler, core_assignment_mo
             return out
 
         het = core_simulation_heterogeneous or {}
-        if het.get('style') == 'elimination' and het.get('rounds'):
+        if het.get('style') == 'elimination' and het.get('bracket'):
             # Trace the final group, seated as it ran (short groups had filler cores).
-            final_group = het['rounds'][-1]['groups'][0]['players']
+            final_group = het['bracket'][-1]['groups'][0]['players']
             seats = sorted((r.get('core_index', 0), r['name']) for r in het['leaderboard']
                            if r.get('stage_reached') == het['bracket_rounds']
                            and any(p['name'] == r['name'] for p in final_group))

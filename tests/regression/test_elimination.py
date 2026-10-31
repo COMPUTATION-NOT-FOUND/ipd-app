@@ -78,8 +78,8 @@ def _np(pool, seed=7, **kw):
 def test_nplayer_bracket_follows_the_plan_and_is_reproducible():
     pool = _pool(26)
     r = _np(pool)
-    assert [len(rd['groups']) for rd in r['rounds']] == [6, 3, 2, 1]
-    assert [rd['advance'] for rd in r['rounds']] == [15, 10, 5, 0]
+    assert [len(rd['groups']) for rd in r['bracket']] == [6, 3, 2, 1]
+    assert [rd['advance'] for rd in r['bracket']] == [15, 10, 5, 0]
     assert r['tournament_info']['style'] == 'elimination'
     assert len(r['leaderboard']) == 26
     stages = [e['stage_reached'] for e in r['leaderboard']]
@@ -93,7 +93,7 @@ def test_nplayer_disqualified_never_advance_or_rank():
     names = {e['name'] for e in r['leaderboard']}
     assert 's3' not in names and 's8' not in names
     assert {d['name'] for d in r['disqualified']} == {'s3', 's8'}
-    for rd in r['rounds'][1:]:
+    for rd in r['bracket'][1:]:
         for g in rd['groups']:
             assert all(p['name'] not in ('s3', 's8') for p in g['players'])
 
@@ -109,7 +109,7 @@ def test_nplayer_rerank_keeps_the_bracket_order():
 def test_nplayer_legacy_unchanged_apart_from_points_per_round():
     pool = _pool(9)
     r = group_tournament(pool, rounds=15, group_size=4, seed=5, payoff_model=PublicGoodsPayoff(b=0.4, c=1.0))
-    assert 'rounds' not in r and 'style' not in r['tournament_info']
+    assert 'bracket' not in r and 'style' not in r['tournament_info']
     assert all('stage_reached' not in e for e in r['leaderboard'])
 
 
@@ -140,7 +140,7 @@ def test_os_elimination_runs_with_fillers_and_disqualifies():
     names = [e['name'] for e in r['leaderboard']]
     assert 's2' not in names and len(names) == 6
     assert any(g['fillers'] for g in r['group_runs'])        # 7 strategies on 3 cores -> padding
-    assert [rd['final'] for rd in r['rounds']][-1]
+    assert [rd['final'] for rd in r['bracket']][-1]
     again = cs.run_heterogeneous_elimination(pool, num_cores=3, seed=2, runs=1, num_processes=50)
     assert [e['name'] for e in again['leaderboard']] == names
 
@@ -174,7 +174,7 @@ def test_nplayer_route_style_option(client):
     assert r.status_code == 200, r.get_json()
     assert r.get_json()['tournament_info']['style'] == 'elimination'
     legacy = client.post('/nplayer/tournament', json={**body, 'style': None})
-    assert 'rounds' not in legacy.get_json()
+    assert 'bracket' not in legacy.get_json()
     bad = client.post('/nplayer/tournament', json={**body, 'style': 'knockout'})
     assert bad.status_code == 400
 

@@ -1102,7 +1102,7 @@ def run_heterogeneous_elimination(strategies_data, num_cores=2, seed=None,
     by ``ranking`` (default: lowest average response time of the tasks that core started).
 
     Returns {'assignment_mode': 'heterogeneous', 'style': 'elimination', 'leaderboard',
-    'rounds', 'baseline', 'errors', ...}. Leaderboard rows use the long metric names
+    'bracket', 'baseline', 'errors', ...}. Leaderboard rows use the long metric names
     (avg_response, avg_waiting, ...) plus ``stage_reached`` / ``stage_order``.
     """
     import elimination
@@ -1180,7 +1180,7 @@ def run_heterogeneous_elimination(strategies_data, num_cores=2, seed=None,
         'ranking_text': ELIMINATION_NOTE + ' ' + describe_ranking(spec, 'os'),
         'elapsed_seconds': round(time.perf_counter() - started, 3),
         'leaderboard': leaderboard,
-        'rounds': bracket,
+        'bracket': bracket,
         'group_runs': group_runs,
         'baseline': baseline_result,
         **_overload_info(baseline_result),

@@ -92,12 +92,30 @@ function osPickCI(src) {
     };
 }
 
+// Heterogeneous result in elimination style (one row per strategy, plus a bracket).
+function osIsElimination(sim) {
+    const het = sim && sim.core_simulation_heterogeneous;
+    return !!(het && het.style === 'elimination' && Array.isArray(het.leaderboard) && het.leaderboard.length);
+}
+
 // Build a uniform list of entries for a given `profile` ('avg' or a workload name) from either
 // the heterogeneous combinations or the homogeneous per-strategy results.
 function simEntries(sim, profile) {
     profile = profile || 'avg';
     const useProf = profile !== 'avg';
     const het = sim.core_simulation_heterogeneous;
+    if (osIsElimination(sim)) {
+        // One row per strategy, measured on its own core in the last group it played. The
+        // round reached travels along so the ranking keeps the bracket order.
+        const last = het.bracket_rounds || 0;
+        return het.leaderboard.map(r => {
+            const src = (useProf && r.workloads && r.workloads[profile]) ? r.workloads[profile] : r;
+            return Object.assign({ label: r.name, ci: osPickCI(src), submitted_at: r.submitted_at,
+                                   stage_reached: r.stage_reached, stage_order: r.stage_order,
+                                   reached: r.stage_reached === last ? 'Final' : `Round ${r.stage_reached}` },
+                                 osPickMetrics(src));
+        });
+    }
     if (het && Array.isArray(het.results) && het.results.length) {
         return het.results.map(r => {
             const src = (useProf && r.workloads && r.workloads[profile]) ? r.workloads[profile] : r;
@@ -343,7 +361,9 @@ function buildSimTable(sim, profile) {
 
     entries.forEach((e, idx) => {
         let nameCell;
-        if (isHet) {
+        if (e.reached) {
+            nameCell = `<strong>${osSimEsc(e.label)}</strong> <small style="color:var(--text-secondary);">${osSimEsc(e.reached)}</small>`;
+        } else if (isHet) {
             const combo = e.combo || {};
             nameCell = Object.keys(combo)
                 .map(n => `<span class="badge" style="background:var(--bg-card); border:1px solid var(--border-color); margin:1px;">${osSimEsc(n)}</span>`).join(' ');
@@ -363,7 +383,9 @@ function buildSimTable(sim, profile) {
         </tr>`;
     }
     html += `</tbody></table>`;
-    html += `<p style="color:var(--text-secondary); font-size:0.85em; margin-top:8px;">${isHet ? 'Each mixture uses each strategy at most once. ' : ''}`
+    const elimNote = 'Elimination: each strategy is measured on its own core (tasks it started), in the last group it played. '
+        + 'Order follows the bracket: round reached first. ';
+    html += `<p style="color:var(--text-secondary); font-size:0.85em; margin-top:8px;">${osIsElimination(sim) ? elimNote : (isHet ? 'Each mixture uses each strategy at most once. ' : '')}`
         + `The highlighted column decides the rank. The baseline row is the plain scheduler with no strategy, for comparison; it is not ranked.</p>`;
     return html;
 }
@@ -376,7 +398,8 @@ function renderOSSimulation(container, sim, opts) {
     sim = sim || {};
     const hetSim = sim.core_simulation_heterogeneous;
     const homoSim = sim.core_simulation_results;
-    const hasHetSim = !!(hetSim && Array.isArray(hetSim.results) && hetSim.results.length);
+    const isElim = osIsElimination(sim);
+    const hasHetSim = isElim || !!(hetSim && Array.isArray(hetSim.results) && hetSim.results.length);
     const hasHomoSim = !!(homoSim && homoSim.strategies && Object.keys(homoSim.strategies).length);
 
     // Surface a backend error block if present.
@@ -397,16 +420,23 @@ function renderOSSimulation(container, sim, opts) {
     // How much of the C(n, cores) space was actually covered. `sampled` is authoritative when
     // present; results published before sampling existed have neither flag, so fall back to
     // comparing the two counts rather than mislabelling old data as a partial sweep.
-    const hetEvaluated = isHet ? (hetSim.evaluated || 0) : 0;
-    const hetTotal = isHet ? (hetSim.total_combinations || hetEvaluated) : 0;
-    const isHetSampled = isHet && (typeof hetSim.sampled === 'boolean'
+    const legacyHet = isHet && !isElim;
+    const hetEvaluated = legacyHet ? (hetSim.evaluated || 0) : 0;
+    const hetTotal = legacyHet ? (hetSim.total_combinations || hetEvaluated) : 0;
+    const isHetSampled = legacyHet && (typeof hetSim.sampled === 'boolean'
         ? hetSim.sampled
         : (hetTotal > 0 && hetEvaluated < hetTotal));
     const hetSeedNote = (hetSim && hetSim.seed !== null && hetSim.seed !== undefined)
         ? ` with seed ${hetSim.seed}` : '';
+    // Not sampled but fewer ranked than the total: the missing mixtures held a disqualified
+    // strategy, so they were seen and left out (not skipped by the time budget).
     const combinationsLabel = isHetSampled
         ? `${hetEvaluated.toLocaleString()} of ${hetTotal.toLocaleString()} (sampled)`
-        : `${hetEvaluated.toLocaleString()} (all)`;
+        : (hetEvaluated < hetTotal
+            ? `${hetEvaluated.toLocaleString()} of ${hetTotal.toLocaleString()} (rest held a disqualified strategy)`
+            : `${hetEvaluated.toLocaleString()} (all)`);
+    const elimLabel = isElim && typeof eliminationSummary === 'function'
+        ? eliminationSummary(hetSim.bracket, numCores) : '';
 
     // The header (title + config bar) is shown by default. When opts.header === false the caller
     // (e.g. the results modal) supplies its own shared header, so we skip ours to avoid duplication.
@@ -420,10 +450,11 @@ function renderOSSimulation(container, sim, opts) {
         html += `
         <h3 style="margin-bottom: 12px; color: var(--primary-color) !important;"><i class="fas fa-microchip"></i> OS Simulation Results</h3>
         <div style="background: var(--bg-hover); padding: 12px 15px; border-radius: 8px; margin-bottom: 18px; border-left: 4px solid var(--info-color); display:flex; gap:24px; flex-wrap:wrap;">
-            <span><span class="badge" style="background-color:${isHet ? 'var(--warning-color)' : 'var(--info-color)'};">${isHet ? 'HETEROGENEOUS' : 'HOMOGENEOUS'}</span></span>
+            <span><span class="badge" style="background-color:${isHet ? 'var(--warning-color)' : 'var(--info-color)'};">${isElim ? 'HETEROGENEOUS · ELIMINATION' : (isHet ? 'HETEROGENEOUS · LEGACY' : 'HOMOGENEOUS')}</span></span>
             <span><strong>Scheduler:</strong> ${osSimEsc(schedLabel)}</span>
             <span><strong>Cores:</strong> ${numCores}</span>
-            ${isHet ? `<span><strong>Combinations:</strong> ${osSimEsc(combinationsLabel)}</span>` : ''}
+            ${legacyHet ? `<span><strong>Combinations:</strong> ${osSimEsc(combinationsLabel)}</span>` : ''}
+            ${isElim ? `<span>${osSimEsc(elimLabel)}</span>` : ''}
         </div>`;
     }
 
@@ -474,7 +505,7 @@ function renderOSSimulation(container, sim, opts) {
         .map(p => `<option value="${p}">${p === 'avg' ? 'Average (all profiles)' : osSimEsc(p)}</option>`).join('');
     const hasBaseline = !!simBaselineEntry(sim, 'avg');
     html += `<div style="margin-bottom: 18px;">
-        <h4 style="border-bottom:1px solid var(--border-color); padding-bottom:8px;">${isHet ? 'Ranked Mixtures' : 'Per-Strategy Metrics'}</h4>
+        <h4 style="border-bottom:1px solid var(--border-color); padding-bottom:8px;">${legacyHet ? 'Ranked Mixtures' : 'Per-Strategy Metrics'}</h4>
         <div style="margin:10px 0;">
             <label style="font-size:0.85em; color:var(--text-secondary); margin-right:8px;">Workload dataset:</label>
             <select id="simProfileSelect" style="padding:6px;">${profileOpts}</select>
@@ -483,8 +514,16 @@ function renderOSSimulation(container, sim, opts) {
         <div id="simMetricsTable"></div>
     </div>`;
 
+    if (isElim && typeof eliminationBracketHtml === 'function') {
+        html += `<div style="margin-bottom: 18px;"><h4 style="border-bottom:1px solid var(--border-color); padding-bottom:8px;">Bracket</h4>
+            ${eliminationBracketHtml(hetSim.bracket, {
+                scoreLabel: 'average response time of the tasks that core started, in that group (lower is better)',
+                score: p => (typeof p.avg_response === 'number') ? p.avg_response.toFixed(1) : '',
+            })}</div>`;
+    }
+
     // Only one way to place the strategies: e.g. 4 strategies on 4 cores, each used once.
-    if (isHet && hetTotal === 1) {
+    if (legacyHet && hetTotal === 1) {
         html += `<p style="color:var(--text-secondary); font-size:0.9em;"><i class="fas fa-circle-info"></i>
             With ${numCores} cores and ${numCores} strategies there is only one possible mixture (each strategy
             is used once), so there is nothing to rank against. Add strategies or lower the core count to

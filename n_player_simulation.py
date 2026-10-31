@@ -817,7 +817,7 @@ def elimination_tournament(
     on, until one final group is left.
 
     Returns the same shape as ``group_tournament`` (``leaderboard``, ``matches``,
-    ``tournament_info``, ...) plus ``rounds``: the bracket, round by round. Leaderboard rows
+    ``tournament_info``, ...) plus ``bracket``: the groups, round by round. Leaderboard rows
     carry ``stage_reached`` (last round played) and ``stage_order`` (place among the players
     who went out in that round); those two decide the final order.
     """
@@ -907,7 +907,7 @@ def elimination_tournament(
     return {
         'leaderboard': leaderboard,
         'matches': all_matches,
-        'rounds': bracket,
+        'bracket': bracket,
         'runtime_errors': runtime_errors,
         'disqualified': runtime_errors,
         'ranking': spec,

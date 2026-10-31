@@ -64,6 +64,7 @@
     <script src="{{ url_for('static', filename='js/ranking.js') }}"></script>
     <script src="{{ url_for('static', filename='js/os_sim_render.js') }}"></script>
     <script src="{{ url_for('static', filename='js/pd_results_render.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/elimination_render.js') }}"></script>
 </head>
 <body>
     {% include 'navbar.html' %}
@@ -269,6 +270,14 @@
                      <label style="display: block; margin-bottom: 5px; font-weight: bold;">Group Size:</label>
                      <input type="number" id="np_group_size" placeholder="All players" min="2" style="width: 100%; padding: 8px;">
                      <small style="color: var(--text-secondary);">Empty = all players</small>
+                </div>
+                <div>
+                     <label style="display: block; margin-bottom: 5px; font-weight: bold;" for="np_style">Tournament style:</label>
+                     <select id="np_style" style="width: 100%; padding: 8px;">
+                         <option value="elimination" selected>Elimination (top of each group moves on)</option>
+                         <option value="legacy">Legacy (every group plays once)</option>
+                     </select>
+                     <small style="color: var(--text-secondary);">Elimination: groups of the size above; half as many groups each round until one final group.</small>
                 </div>
                 <div>
                      <label style="display: block; margin-bottom: 5px; font-weight: bold;">Seed:</label>
@@ -549,12 +558,18 @@
                     <option value="homogeneous">Homogeneous (all cores one strategy)</option>
                     <option value="heterogeneous">Heterogeneous (each strategy at most once)</option>
                 </select>
+                <label style="display: block; margin: 8px 0 4px; font-weight: normal;" for="os_style">Heterogeneous style:</label>
+                <select id="os_style" style="width: 100%; padding: 8px;">
+                    <option value="elimination" selected>Elimination (groups of one per core, best move on)</option>
+                    <option value="legacy">Legacy (every combination)</option>
+                </select>
                 <label style="display: flex; align-items: center; gap: 7px; margin-top: 8px; font-weight: normal;">
                     <input type="checkbox" id="os_unlimited" style="width: auto; margin: 0; flex: 0 0 auto;">
-                    <span style="font-size: 0.85rem;">Remove limits (evaluate every combination)</span>
+                    <span style="font-size: 0.85rem;">Remove limits (legacy: evaluate every combination)</span>
                 </label>
-                <small style="color: var(--text-secondary);">Heterogeneous runs stop after 5 minutes and
-                    report a random sample. Tick to sweep the whole space instead.</small>
+                <small style="color: var(--text-secondary);">Elimination scores each strategy on its own core,
+                    in groups the size of the core count. Legacy runs stop after 5 minutes and report a
+                    random sample; tick to sweep the whole space instead.</small>
             </div>
             <div>
                 <label style="display: block; margin-bottom: 5px; font-weight: bold;">Scheduler:</label>
@@ -931,6 +946,18 @@
                 </div>`);
         }
 
+        // Groups played over a whole elimination (same rule as elimination.py, groups may be 1).
+        function eliminationGroupCount(n, size) {
+            let total = 0;
+            while (n > 0) {
+                const g = Math.ceil(n / size);
+                total += g;
+                if (g <= 1) break;
+                n = Math.min(Math.ceil(g / 2) * size, n - 1);
+            }
+            return total;
+        }
+
         function confirmWorkload(kind, n, rounds, modes, extra) {
             let desc, decisions;
             if (kind === 'nplayer') {
@@ -940,15 +967,17 @@
                 // OS sim is priced per combination, not per move, so it gets its own dialog rather
                 // than going through the shared "~N moves" wording below.
                 const cores = (extra && extra.numCores) || 2;
-                const isHet = extra && extra.assignment === 'heterogeneous';
+                const isElim = extra && extra.assignment === 'heterogeneous' && extra.style === 'elimination';
+                const isHet = extra && extra.assignment === 'heterogeneous' && !isElim;
                 const unlimited = !!(extra && extra.unlimited);
-                // Homogeneous = one run per strategy; heterogeneous enumerates C(n, cores) mixtures.
-                const comb = isHet ? nCr(n, cores) : n;
+                // Homogeneous = one run per strategy; heterogeneous enumerates C(n, cores) mixtures;
+                // elimination = one run per group over all rounds (see elimination.py).
+                const comb = isElim ? eliminationGroupCount(n, cores) : (isHet ? nCr(n, cores) : n);
                 // +1: every run also simulates the plain-scheduler baseline, which costs about one more.
                 const runs = (extra && extra.runs) || 1, tasks = (extra && extra.tasks) || 50;
                 const perComb = osSecsPerCombination(tasks, runs);
                 const fullSecs = (comb + 1) * perComb;
-                const head = `${comb.toLocaleString()} core-assignment combination(s) on ${cores} cores, from ${n} strategies, `
+                const head = `${comb.toLocaleString()} ${isElim ? 'elimination group run(s)' : 'core-assignment combination(s)'} on ${cores} cores, from ${n} strategies, `
                     + `${plural(runs, 'run')} of ${tasks} tasks each.`;
 
                 if (!isHet || unlimited || fullSecs <= OS_TIME_BUDGET_SECS) {
@@ -1700,6 +1729,7 @@
 
             const payload = {
                 strategies, rounds, seed, group_size: groupSize,
+                style: document.getElementById('np_style').value,
                 payoff_model: payoffModel, modes,
                 discount_factor: discountFactor, stochastic_prob: stochasticProb,
                 isolated: document.getElementById('isolatedNp')?.checked || false
@@ -1748,14 +1778,15 @@
             result.rank_mode = 'nplayer';
             result.leaderboard = rankEntries(result.leaderboard || [], spec, 'nplayer');
             const useWeights = spec.metric === 'weighted_score';
+            const elim = info.style === 'elimination' && Array.isArray(result.bracket);
 
             let html = `<div class="results" style="border-left: 4px solid var(--primary-color); background: var(--bg-card);">
                 <h3 style="color: var(--primary-color) !important;">N-Player Results</h3>
 
                 <div style="background: rgba(0,0,0,0.2); padding: 10px; margin-bottom: 20px;">
-                    <strong>Info:</strong> ${rounds === '' ? '' : plural(Number(rounds), 'round') + ','}
-                    ${nGroups === '' ? '' : plural(Number(nGroups), 'group') + ','}
-                    Group size: ${groupSize || 'all'},
+                    <strong>Info:</strong> ${rounds === '' ? '' : plural(Number(rounds), 'round') + ' per game,'}
+                    ${elim ? escHtml(eliminationSummary(result.bracket, groupSize || 'all'))
+                           : `${nGroups === '' ? '' : plural(Number(nGroups), 'group') + ','} Group size: ${groupSize || 'all'}, (legacy style)`}
                     Modes: ${escHtml(modes.join(', '))}
                 </div>
                 ${disqualifiedHtml(collectDisqualified(result))}
@@ -1769,8 +1800,9 @@
                             <tr style="background: rgba(255,255,255,0.1);">
                                 <th style="padding: 8px; border: 1px solid var(--border-color);">Rank</th>
                                 <th style="padding: 8px; border: 1px solid var(--border-color);">Name</th>
+                                ${elim ? '<th style="padding: 8px; border: 1px solid var(--border-color);">Reached</th>' : ''}
                                 ${useWeights ? '<th style="padding: 8px; border: 1px solid var(--border-color);">Weighted score</th>' : ''}
-                                <th style="padding: 8px; border: 1px solid var(--border-color);">Total Points</th>
+                                <th style="padding: 8px; border: 1px solid var(--border-color);">${elim ? 'Points / round (last group)' : 'Total Points'}</th>
                                 <th style="padding: 8px; border: 1px solid var(--border-color);">Coop %</th>
                                 <th style="padding: 8px; border: 1px solid var(--border-color);">W/D/L</th>
                             </tr>
@@ -1782,8 +1814,9 @@
                 html += `<tr>
                     <td style="padding: 8px; border: 1px solid var(--border-color); text-align: center;" title="${p.rank_label.startsWith('=') ? 'Tied' : ''}">${p.rank_label}</td>
                     <td style="padding: 8px; border: 1px solid var(--border-color);">${escHtml(p.name)}</td>
+                    ${elim ? `<td style="padding: 8px; border: 1px solid var(--border-color); text-align: center;">${p.stage_reached === result.bracket.length ? 'Final' : 'Round ' + escHtml(p.stage_reached)}</td>` : ''}
                     ${useWeights ? `<td style="padding: 8px; border: 1px solid var(--border-color); text-align: center;">${Number(p.weighted_score ?? 0).toFixed(2)}</td>` : ''}
-                    <td style="padding: 8px; border: 1px solid var(--border-color); text-align: center;">${Number(p.total_points ?? 0).toFixed(2)}</td>
+                    <td style="padding: 8px; border: 1px solid var(--border-color); text-align: center;">${Number((elim ? p.points_per_round : p.total_points) ?? 0).toFixed(2)}</td>
                     <td style="padding: 8px; border: 1px solid var(--border-color); text-align: center;">${Number(p.cooperation_percentage ?? 0).toFixed(1)}%</td>
                     <td style="padding: 8px; border: 1px solid var(--border-color); text-align: center;">${p.wins ?? 0}/${p.draws ?? 0}/${p.losses ?? 0}</td>
                 </tr>`;
@@ -1796,7 +1829,12 @@
             html += `<div class="chart-section" style="margin: 30px 0; padding: 20px; background: var(--bg-dark); border-radius: 8px;"><div id="pdChartsNplayer"></div></div>`;
 
             const matches = Array.isArray(result.matches) ? result.matches : [];
-            if (matches.length > 0) {
+            if (elim) {
+                html += `<div style="margin-top: 20px;"><h4>Bracket</h4>${eliminationBracketHtml(result.bracket, {
+                    scoreLabel: 'points per round in that group',
+                    score: p => (typeof p.points_per_round === 'number') ? p.points_per_round.toFixed(2) : '',
+                })}</div>`;
+            } else if (matches.length > 0) {
                 html += `<div class="match-results" style="margin-top: 20px;"><h4>Groups</h4>`;
                 matches.forEach((match) => {
                     const players = Array.isArray(match.players) ? match.players : [];
@@ -1906,7 +1944,8 @@
             // Validity before cost: heterogeneous places one distinct strategy per core, so fewer
             // strategies than cores cannot be arranged at all. Checked ahead of the confirm dialog
             // so the user isn't asked to approve a run that would only then be refused.
-            if (coreAssignmentMode === 'heterogeneous' && strategies.length < numCores) {
+            const style = document.getElementById('os_style').value;
+            if (coreAssignmentMode === 'heterogeneous' && style === 'legacy' && strategies.length < numCores) {
                 alert(`Heterogeneous assignment needs at least ${numCores} strategies (one per core). Add strategies or lower cores.`); return;
             }
 
@@ -1918,9 +1957,9 @@
             // No cap — the run is bounded by time and reports what it covered. The dialog states
             // how long it will take and, when sampling, how much of the space will be skipped.
             if (!confirmWorkload('os', strategies.length, 0, 0,
-                                 { numCores, assignment: coreAssignmentMode, unlimited, runs, tasks })) return;
+                                 { numCores, assignment: coreAssignmentMode, style, unlimited, runs, tasks })) return;
 
-            const payload = { strategies, num_cores: numCores, core_assignment_mode: coreAssignmentMode, scheduler, seed, unlimited,
+            const payload = { strategies, num_cores: numCores, core_assignment_mode: coreAssignmentMode, style, scheduler, seed, unlimited,
                               runs, num_processes: tasks, warmup,
                               isolated: document.getElementById('isolatedOs')?.checked || false };
             const spinner = runSpinner('osResults', 'Running OS simulation', 'osSimBtn');

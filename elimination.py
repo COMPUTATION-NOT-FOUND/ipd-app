@@ -141,9 +141,11 @@ def run_bracket(players, group_size, play_round, order_across, min_group=2):
         played = play_round(round_no, groups)
         still_in = sum(len(order) for _, order in played)
         target = advance_count(len(alive), group_size, min_group) if g > 1 else 0
-        final = g <= 1 or still_in <= 2 or target >= still_in
+        # Disqualifications can leave fewer players than places: then everyone left moves on
+        # (still fewer than this round started with, so the bracket always ends).
+        final = g <= 1 or still_in <= 1
         if final:
-            # The final group (or too few left to split): one order decides the last places.
+            # The final group (or nobody left to play): one order decides the last places.
             standing = played[0][1] if len(played) == 1 else \
                 order_across([p for _, order in played for p in order])
             advanced, wildcards, out = [], set(), standing
