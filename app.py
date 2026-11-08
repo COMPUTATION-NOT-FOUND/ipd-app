@@ -2332,6 +2332,19 @@ def round_robin_tournament(strategies, rounds=200, payoff_matrix=None, modes=Non
         # Every strategy left out of the ranking, with why: safety check or failed during the run.
         'disqualified': disqualified_strategies,
         'runtime_errors': list(runtime_dq.values()),
+        # Saved with the result so the website can show rounds, modes and per-mode tabs.
+        'rounds': rounds,
+        'modes': list(modes),
+        'payoff_matrix': payoff_matrix,
+        'tournament_info': {
+            'format': '1v1',
+            'rounds': rounds,
+            'modes': list(modes),
+            'payoff_matrix': payoff_matrix,
+            'seed': seed,
+            'discount_factor': discount_factor,
+            'stochastic_prob': stochastic_prob,
+        },
     }
 
 
