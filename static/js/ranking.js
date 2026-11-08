@@ -145,8 +145,16 @@ function rankCompare(a, b, direction) {
     return better ? -1 : 1;
 }
 
-const RANK_ELIMINATION_NOTE = 'Elimination: ranked by the round reached, then by place in that round '
-    + '(group place first, then score across groups).';
+const RANK_ELIMINATION_NOTE = 'Elimination: players who went further always rank higher.';
+
+// Players in the same round may come from different groups, and total points depend on how
+// many rounds a group played, so compare points per round instead. Same as ranking.py.
+function rankEliminationGet(e, metric) {
+    if (metric === 'total_points' && typeof e.points_per_round === 'number' && isFinite(e.points_per_round)) {
+        return e.points_per_round;
+    }
+    return rankDefaultGet(e, metric);
+}
 
 function rankIsElimination(entries) {
     return (entries || []).some(e => e && typeof e.stage_reached === 'number' && isFinite(e.stage_reached));
@@ -156,7 +164,8 @@ function rankIsElimination(entries) {
 // Returns a new array; the original order is the last tie-break.
 function rankEntries(entries, spec, mode, get) {
     spec = normalizeRanking(spec, mode);
-    get = get || rankDefaultGet;
+    const elim = rankIsElimination(entries);
+    get = get || (elim ? rankEliminationGet : rankDefaultGet);
     const cat = RANK_METRICS[mode];
     if (mode !== 'os') {
         // The weighted score always follows this ranking's weights, so it can't go stale.
@@ -167,13 +176,18 @@ function rankEntries(entries, spec, mode, get) {
             }
         });
     }
-    // Elimination results: the bracket decides the order (round reached, then place in that
-    // round), so re-ranking can never contradict who actually went through. Same as ranking.py.
-    const lead = rankIsElimination(entries) ? [['stage_reached', 'desc'], ['stage_order', 'asc']] : [];
+    // Elimination results: the round reached always comes first, so nobody ranks above a
+    // player who went further. Inside a round, the chosen ranking decides; the place from the
+    // bracket is only the last tie-break. Same as ranking.py.
+    const lead = elim ? [['stage_reached', 'desc']] : [];
     const chain = lead.concat([[spec.metric, spec.direction]]);
-    if (!spec.shared_rank) spec.tiebreak.forEach(t => chain.push([t, cat[t][1]]));
+    if (!spec.shared_rank) {
+        spec.tiebreak.forEach(t => chain.push([t, cat[t][1]]));
+        if (elim) chain.push(['stage_order', 'asc']);
+    }
     const nLead = lead.length + 1;
-    const keyed = (entries || []).map((e, i) => ({ i, e, v: chain.map(([m], k) => k < lead.length
+    const stageKey = m => m === 'stage_reached' || m === 'stage_order';
+    const keyed = (entries || []).map((e, i) => ({ i, e, v: chain.map(([m]) => stageKey(m)
         ? ((typeof e[m] === 'number' && isFinite(e[m])) ? e[m] : null) : rankValue(e, m, get)) }));
     keyed.sort((x, y) => {
         for (let k = 0; k < chain.length; k++) {
@@ -262,8 +276,10 @@ function readRankingControls(prefix, mode) {
 }
 
 // Plain line shown above a ranked table.
-function rankingLineHtml(spec, mode) {
-    return `<p class="ranking-line" style="margin: 0 0 10px; color: var(--text-secondary);"><i class="fas fa-sort-amount-down"></i> ${rankEsc(describeRanking(normalizeRanking(spec, mode), mode))}</p>`;
+// `elimination`: true when the rows come from a bracket (round reached is sorted first).
+function rankingLineHtml(spec, mode, elimination) {
+    const text = (elimination ? RANK_ELIMINATION_NOTE + ' ' : '') + describeRanking(normalizeRanking(spec, mode), mode);
+    return `<p class="ranking-line" style="margin: 0 0 10px; color: var(--text-secondary);"><i class="fas fa-sort-amount-down"></i> ${rankEsc(text)}</p>`;
 }
 
 // One clear box listing every disqualified strategy and why. `items`: [{name, reason|error, stage?, detail?}].

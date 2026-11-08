@@ -106,7 +106,7 @@ function simEntries(sim, profile) {
     const het = sim.core_simulation_heterogeneous;
     if (osIsElimination(sim)) {
         // One row per strategy, measured on its own core in the last group it played. The
-        // round reached travels along so the ranking keeps the bracket order.
+        // round reached travels along so the ranking puts it first.
         const last = het.bracket_rounds || 0;
         return het.leaderboard.map(r => {
             const src = (useProf && r.workloads && r.workloads[profile]) ? r.workloads[profile] : r;

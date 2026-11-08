@@ -196,8 +196,17 @@ def _stage_value(entry, key):
     return v if _is_num(v) else None
 
 
-ELIMINATION_NOTE = ("Elimination: ranked by the round reached, then by place in that round "
-                    "(group place first, then score across groups).")
+ELIMINATION_NOTE = "Elimination: players who went further always rank higher."
+
+_STAGE_KEYS = ('stage_reached', 'stage_order')
+
+
+def _elimination_get(entry, metric):
+    """Players in the same round may come from different groups, and total points depend on
+    how many rounds a group played, so compare points per round instead."""
+    if metric == 'total_points' and _is_num(entry.get('points_per_round')):
+        return entry['points_per_round']
+    return _default_get(entry, metric)
 
 
 def is_elimination(entries):
@@ -208,7 +217,8 @@ def rank_entries(entries, spec, mode, get=None):
     """Sort ``entries`` (dicts) by ``spec`` and set ``rank`` (int) and ``rank_label`` ('=2') on
     each. Returns a new list; the input order is the last tie-break."""
     spec = normalize_ranking(spec, mode)
-    get = get or _default_get
+    elim = is_elimination(entries)
+    get = get or (_elimination_get if elim else _default_get)
     catalog = METRICS[mode]
     if mode != 'os':
         # The weighted score always follows this ranking's weights, so it can't go stale.
@@ -216,17 +226,18 @@ def rank_entries(entries, spec, mode, get=None):
             if isinstance(e, dict) and ('wins' in e or 'points_percentage' in e):
                 e['weighted_score'] = weighted_score(e, spec['weights'])
                 e['win_rate'] = win_rate(e)
-    # Elimination results: the bracket decides the order (round reached, then place in that
-    # round), so re-ranking a stored result can never contradict who actually went through.
-    lead = []
-    if is_elimination(entries):
-        lead = [('stage_reached', 'desc'), ('stage_order', 'asc')]
+    # Elimination results: the round reached always comes first, so nobody ranks above a
+    # player who went further. Inside a round, the chosen ranking decides; the place from the
+    # bracket is only the last tie-break.
+    lead = [('stage_reached', 'desc')] if elim else []
     chain = lead + [(spec['metric'], spec['direction'])]
     if not spec['shared_rank']:
         chain += [(t, catalog[t][1]) for t in spec['tiebreak']]
+        if elim:
+            chain.append(('stage_order', 'asc'))
     n_lead = len(lead) + 1   # values that must match for a shared place
 
-    keyed = [(i, e, [_stage_value(e, m) if (m, d) in lead else _value(e, m, get) for m, d in chain])
+    keyed = [(i, e, [_stage_value(e, m) if m in _STAGE_KEYS else _value(e, m, get) for m, d in chain])
              for i, e in enumerate(entries)]
 
     def cmp(x, y):
@@ -303,7 +314,7 @@ def apply_ranking_to_result(result, kind, spec):
         if het['results'] and winner is None:
             winner = ' + '.join((het['results'][0].get('combination') or {}).keys())
     if isinstance(het, dict) and isinstance(het.get('leaderboard'), list):
-        # Elimination: one row per strategy (its own core's numbers), ordered by the bracket.
+        # Elimination: one row per strategy (its own core's numbers), round reached first.
         het['leaderboard'] = rank_entries([r for r in het['leaderboard'] if isinstance(r, dict)],
                                           spec, 'os')
         het['ranking'] = spec
@@ -334,7 +345,7 @@ def preview_rows(result, kind):
             if isinstance(e, dict):
                 rows.append({'name': str(e.get('name', '')), 'submitted_at': e.get('submitted_at')
                              if isinstance(e.get('submitted_at'), str) else None,
-                             **nums(e, keep + ['draws', 'stage_reached'])})
+                             **nums(e, keep + ['draws', 'points_per_round', 'stage_reached', 'stage_order'])})
         return rows
     homo = result.get('core_simulation_results') or {}
     for n, v in (homo.get('strategies') or {}).items():

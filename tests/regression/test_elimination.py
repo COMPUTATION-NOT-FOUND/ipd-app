@@ -98,12 +98,37 @@ def test_nplayer_disqualified_never_advance_or_rank():
             assert all(p['name'] not in ('s3', 's8') for p in g['players'])
 
 
-def test_nplayer_rerank_keeps_the_bracket_order():
+def _round_then_metric(board, metric, higher_first=True):
+    """Round reached never goes up, and inside a round the metric is in order."""
+    stages = [e['stage_reached'] for e in board]
+    assert stages == sorted(stages, reverse=True)
+    for a, b in zip(board, board[1:]):
+        if a['stage_reached'] == b['stage_reached']:
+            assert (a[metric] >= b[metric] - 1e-9) if higher_first else (a[metric] <= b[metric] + 1e-9)
+
+
+def test_nplayer_rerank_keeps_rounds_and_sorts_inside_each_round():
     r = _np(_pool(20), modes=['standard', 'stochastic'])
-    before = [e['name'] for e in r['leaderboard']]
+    before = {e['name']: e['stage_reached'] for e in r['leaderboard']}
     apply_ranking_to_result(r, 'nplayer', {'metric': 'cooperation_percentage'})
-    assert [e['name'] for e in r['leaderboard']] == before
+    assert {e['name']: e['stage_reached'] for e in r['leaderboard']} == before
+    _round_then_metric(r['leaderboard'], 'cooperation_percentage')
+    assert r['winner'] == r['leaderboard'][0]['name']
     assert r['ranking_text'].startswith('Elimination')
+
+
+def test_nplayer_elimination_weighted_score_decides_inside_the_final():
+    # Two finalists with equal points: the bracket put A first, but B has the better weighted score.
+    rows = [
+        {'name': 'A', 'stage_reached': 5, 'stage_order': 0, 'wins': 0, 'draws': 5, 'losses': 0,
+         'points_percentage': 0.0, 'cooperation_percentage': 0.0, 'total_points': 0, 'points_per_round': 0.0},
+        {'name': 'B', 'stage_reached': 5, 'stage_order': 1, 'wins': 1, 'draws': 4, 'losses': 0,
+         'points_percentage': 0.0, 'cooperation_percentage': 0.0, 'total_points': 0, 'points_per_round': 0.0},
+        {'name': 'C', 'stage_reached': 1, 'stage_order': 0, 'wins': 0, 'draws': 0, 'losses': 1,
+         'points_percentage': 0.0, 'cooperation_percentage': 100.0, 'total_points': 0, 'points_per_round': 0.0},
+    ]
+    out = rank_entries(rows, {'metric': 'weighted_score'}, 'nplayer')
+    assert [e['name'] for e in out] == ['B', 'A', 'C']     # C scores highest but went out first
 
 
 def test_nplayer_legacy_unchanged_apart_from_points_per_round():
@@ -150,11 +175,13 @@ def test_os_elimination_rerank_and_preview():
     pool = [{'name': p['name'], 'code': p['code']} for p in _pool(5)]
     het = cs.run_heterogeneous_elimination(pool, num_cores=2, seed=3, runs=1, num_processes=50)
     result = {'core_simulation_heterogeneous': het}
-    before = [e['name'] for e in het['leaderboard']]
+    before = {e['name']: e['stage_reached'] for e in het['leaderboard']}
     apply_ranking_to_result(result, 'os', {'metric': 'throughput'})
-    assert [e['name'] for e in het['leaderboard']] == before
-    assert result['winner'] == before[0]
-    assert [row['name'] for row in preview_rows(result, 'os')] == before
+    assert {e['name']: e['stage_reached'] for e in het['leaderboard']} == before
+    _round_then_metric(het['leaderboard'], 'throughput')
+    after = [e['name'] for e in het['leaderboard']]
+    assert result['winner'] == after[0]
+    assert [row['name'] for row in preview_rows(result, 'os')] == after
 
 
 def test_rank_entries_without_stages_is_unchanged():
